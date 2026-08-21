@@ -1,69 +1,338 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
+import { useState } from 'react';
+import { Coffee, Croissant, Search, ShoppingBag, Trash2, User, X, Tag, Store, History, Settings, Flame, Menu } from 'lucide-react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation'; 
+
+export default function PosInterface() {
+  const pathname = usePathname(); 
+
+  // ---------------- DATA ----------------
+  const menuItems = [
+    { id: 'M001', name: 'V60 Filter', price: 35000, category: 'Coffee' },
+    { 
+      id: 'M002', name: 'Latte', price: 30000, category: 'Coffee',
+      options: [
+        { group: 'Temperature', choices: [{ name: 'Hot', addPrice: 0 }, { name: 'Iced', addPrice: 3000 }] },
+        { group: 'Milk Type', choices: [{ name: 'Fresh Milk', addPrice: 0 }, { name: 'Oat Milk', addPrice: 8000 }] }
+      ]
+    },
+    { id: 'M003', name: 'Butter Croissant', price: 25000, category: 'Snack' },
+  ];
+
+  const availableDiscounts = [
+    { id: 'D001', name: 'Opening Promo', type: 'percentage', value: 10 },
+    { id: 'D002', name: 'Staff Meal', type: 'percentage', value: 50 },
+    { id: 'D003', name: 'BYO Cup', type: 'flat', value: 5000 },
+  ];
+
+  // ---------------- STATE ----------------
+  const [cart, setCart] = useState<any[]>([]); 
+  const [appliedDiscounts, setAppliedDiscounts] = useState<any[]>([]); 
+  const [activeCategory, setActiveCategory] = useState('All');
+  
+  // Modals & Drawers
+  const [selectedItem, setSelectedItem] = useState<any>(null); 
+  const [tempOptions, setTempOptions] = useState<any>({}); 
+  const [isDiscountModalOpen, setIsDiscountModalOpen] = useState(false); 
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false); // Controls the burger menu
+
+  // ---------------- ACTIONS ----------------
+  const handleProductClick = (item: any) => {
+    if (item.options && item.options.length > 0) {
+      setSelectedItem(item);
+      setTempOptions({}); 
+    } else {
+      addToCart(item, {});
+    }
+  };
+
+  const handleOptionSelect = (groupName: string, choice: any) => {
+    setTempOptions({ ...tempOptions, [groupName]: choice });
+  };
+
+  const addToCart = (item: any, selectedModifiers: any) => {
+    let finalPrice = item.price;
+    let notes: string[] = [];
+    Object.values(selectedModifiers).forEach((mod: any) => {
+      finalPrice += mod.addPrice;
+      if (mod.name !== 'Hot' && mod.name !== 'Fresh Milk') notes.push(mod.name);
+    });
+    setCart([...cart, { cartId: Math.random().toString(), id: item.id, name: item.name, finalPrice, notes: notes.join(', ') }]);
+    setSelectedItem(null); 
+  };
+
+  const removeFromCart = (cartId: string) => {
+    setCart(cart.filter(item => item.cartId !== cartId));
+  };
+
+  const toggleDiscount = (discount: any) => {
+    const isAlreadyApplied = appliedDiscounts.some(d => d.id === discount.id);
+    if (isAlreadyApplied) setAppliedDiscounts(appliedDiscounts.filter(d => d.id !== discount.id));
+    else setAppliedDiscounts([...appliedDiscounts, discount]);
+  };
+
+  const removeDiscount = (discountId: string) => {
+    setAppliedDiscounts(appliedDiscounts.filter(d => d.id !== discountId));
+  };
+
+  // ---------------- MATH LOGIC ----------------
+  const subtotal = cart.reduce((sum, item) => sum + item.finalPrice, 0);
+  let totalDiscountAmount = 0;
+  appliedDiscounts.forEach(disc => {
+    if (disc.type === 'flat') totalDiscountAmount += disc.value;
+    else if (disc.type === 'percentage') totalDiscountAmount += (subtotal * (disc.value / 100));
+  });
+  if (totalDiscountAmount > subtotal) totalDiscountAmount = subtotal;
+  const finalTotal = subtotal - totalDiscountAmount;
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="flex flex-col md:flex-row h-screen bg-slate-50 text-slate-800 relative">
+      
+      {/* ----------------- MOBILE BURGER DRAWER ----------------- */}
+      {isMobileMenuOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 md:hidden flex" onClick={() => setIsMobileMenuOpen(false)}>
+          <div className="w-64 bg-white h-full shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <h2 className="font-black text-slate-800 flex items-center gap-2">
+                <Coffee className="text-blue-600" size={20} /> 
+                TRISHA CAFE
+              </h2>
+              <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 bg-slate-200 rounded-full transition-colors">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="p-4 flex flex-col gap-2">
+              <Link href="/" className="p-3 rounded-lg bg-blue-50 text-blue-700 font-bold flex items-center gap-3">
+                <Store size={20}/> POS
+              </Link>
+              <Link href="/history" className="p-3 rounded-lg text-slate-600 hover:bg-slate-50 font-bold flex items-center gap-3">
+                <History size={20}/> LOGS
+              </Link>
+              <Link href="/manage" className="p-3 rounded-lg text-slate-600 hover:bg-slate-50 font-bold flex items-center gap-3">
+                <Settings size={20}/> EDIT
+              </Link>
+              <hr className="my-2 border-slate-100"/>
+              <Link href="/kitchen" className="p-3 rounded-lg text-slate-600 hover:bg-orange-50 hover:text-orange-600 font-bold flex items-center gap-3">
+                <Flame size={20}/> KDS
+              </Link>
+            </div>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+      )}
+
+      {/* ----------------- MODALS (Product & Discount) ----------------- */}
+      {selectedItem && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <h2 className="text-xl font-bold">{selectedItem.name}</h2>
+              <button onClick={() => setSelectedItem(null)} className="p-2 bg-slate-200 hover:bg-slate-300 rounded-full transition-colors"><X size={20} /></button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1">
+              {selectedItem.options.map((optionGroup: any, index: number) => (
+                <div key={index} className="mb-6 last:mb-0">
+                  <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider mb-3">{optionGroup.group}</h3>
+                  <div className="flex flex-col gap-2">
+                    {optionGroup.choices.map((choice: any, cIdx: number) => {
+                      const isSelected = tempOptions[optionGroup.group]?.name === choice.name;
+                      return (
+                        <button key={cIdx} onClick={() => handleOptionSelect(optionGroup.group, choice)}
+                          className={`flex justify-between items-center p-3 rounded-lg border-2 transition-all text-left ${isSelected ? 'border-blue-600 bg-blue-50/50' : 'border-slate-200 hover:border-blue-300'}`}>
+                          <span className={`font-medium ${isSelected ? 'text-blue-700' : 'text-slate-700'}`}>{choice.name}</span>
+                          {choice.addPrice > 0 && <span className="text-sm text-slate-500">+Rp {choice.addPrice.toLocaleString('id-ID')}</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50">
+              <button onClick={() => addToCart(selectedItem, tempOptions)} className="w-full bg-blue-600 text-white font-bold py-4 rounded-xl hover:bg-blue-700 transition-colors text-lg shadow-sm">
+                Add to Ticket
+              </button>
+            </div>
+          </div>
         </div>
-      </main>
+      )}
+
+      {isDiscountModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <h2 className="text-xl font-bold flex items-center gap-2"><Tag size={20}/> Apply Discount</h2>
+              <button onClick={() => setIsDiscountModalOpen(false)} className="p-2 bg-slate-200 hover:bg-slate-300 rounded-full transition-colors"><X size={20} /></button>
+            </div>
+            <div className="p-4 flex flex-col gap-3">
+              {availableDiscounts.map((disc) => {
+                const isSelected = appliedDiscounts.some(d => d.id === disc.id);
+                return (
+                  <button key={disc.id} onClick={() => toggleDiscount(disc)}
+                    className={`flex justify-between items-center p-4 rounded-xl border-2 transition-all text-left ${isSelected ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:border-slate-300 bg-white'}`}>
+                    <div>
+                      <h4 className={`font-bold ${isSelected ? 'text-emerald-700' : 'text-slate-800'}`}>{disc.name}</h4>
+                      <p className="text-sm text-slate-500 uppercase tracking-wide mt-0.5">{disc.type}</p>
+                    </div>
+                    <span className={`font-black text-lg ${isSelected ? 'text-emerald-600' : 'text-slate-600'}`}>
+                      {disc.type === 'percentage' ? `${disc.value}%` : `-Rp ${disc.value.toLocaleString('id-ID')}`}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50">
+              <button onClick={() => setIsDiscountModalOpen(false)} className="w-full bg-slate-800 text-white font-bold py-3 rounded-xl hover:bg-slate-900 transition-colors">
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+
+      {/* ----------------- CENTER SECTION: Menu Grid ----------------- */}
+      <div className="flex-1 flex flex-col h-full overflow-hidden bg-white">
+        
+        {/* NEW HORIZONTAL HEADER */}
+        <header className="bg-white p-4 flex justify-between items-center z-10 border-b border-slate-100">
+          
+          <div className="flex items-center gap-2 md:gap-6">
+            {/* Mobile Hamburger Button */}
+            <button onClick={() => setIsMobileMenuOpen(true)} className="md:hidden p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg transition-colors">
+              <Menu size={20} />
+            </button>
+            
+            <h1 className="text-xl font-black tracking-tight text-slate-800 flex items-center gap-2">
+              <Coffee className="text-blue-600 hidden md:block" size={24} /> 
+              TRISHA CAFE
+            </h1>
+
+            {/* Desktop Navigation Links */}
+            <nav className="hidden md:flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
+              <Link href="/" className="px-4 py-1.5 rounded-md text-sm font-bold bg-white text-blue-600 shadow-sm">
+                POS
+              </Link>
+              <Link href="/history" className="px-4 py-1.5 rounded-md text-sm font-bold text-slate-500 hover:text-slate-800 hover:bg-slate-200 transition-colors">
+                LOGS
+              </Link>
+              <Link href="/manage" className="px-4 py-1.5 rounded-md text-sm font-bold text-slate-500 hover:text-slate-800 hover:bg-slate-200 transition-colors">
+                EDIT
+              </Link>
+              <div className="w-px h-4 bg-slate-300 mx-1"></div>
+              <Link href="/kitchen" className="px-4 py-1.5 rounded-md text-sm font-bold text-slate-500 hover:text-orange-600 hover:bg-orange-100 transition-colors flex items-center gap-1.5">
+                <Flame size={14} /> KDS
+              </Link>
+            </nav>
+          </div>
+
+          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg hidden sm:flex">
+            <Search size={18} className="text-slate-400" />
+            <input type="text" placeholder="Search menu..." className="bg-transparent border-none outline-none text-sm w-32 lg:w-48" />
+          </div>
+        </header>
+
+        {/* Categories */}
+        <div className="p-4 flex gap-3 overflow-x-auto bg-white">
+          {['All', 'Coffee', 'Snack', 'Retail'].map(cat => (
+            <button key={cat} onClick={() => setActiveCategory(cat)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-colors border ${activeCategory === cat ? 'bg-slate-800 text-white border-slate-800 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
+              {cat === 'Coffee' ? <Coffee size={16} /> : <Croissant size={16} />} {cat}
+            </button>
+          ))}
+        </div>
+
+        {/* Grid */}
+        <div className="flex-1 overflow-y-auto p-4 pt-0 bg-slate-50 shadow-inner">
+          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mt-4">
+            {menuItems.filter(item => activeCategory === 'All' || item.category === activeCategory).map((item) => (
+              <button key={item.id} onClick={() => handleProductClick(item)} className="bg-white p-5 rounded-xl shadow-[0_2px_8px_-4px_rgba(0,0,0,0.1)] border border-slate-200 hover:border-blue-500 hover:shadow-md transition-all text-left flex flex-col h-32 justify-between">
+                <div>
+                  <span className="font-bold text-lg text-slate-800 leading-tight block">{item.name}</span>
+                  {item.options && <span className="text-[10px] font-bold uppercase tracking-wider text-blue-500 bg-blue-50 px-2 py-0.5 rounded mt-1 inline-block border border-blue-100">Customizable</span>}
+                </div>
+                <span className="text-blue-600 font-bold text-lg">Rp {item.price.toLocaleString('id-ID')}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ----------------- RIGHT SECTION: Cart ----------------- */}
+      <div className="w-full md:w-[400px] bg-white border-l border-slate-200 flex flex-col h-[50vh] md:h-full shadow-2xl z-20 shrink-0">
+        <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-white">
+          <div className="flex items-center gap-2">
+            <User size={20} className="text-slate-500" />
+            <span className="font-bold text-slate-800">Current Order</span>
+          </div>
+          <span className="bg-blue-100 text-blue-700 text-xs font-bold px-2 py-1 rounded">New Ticket</span>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 bg-slate-50/50">
+          {cart.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-2">
+              <ShoppingBag size={48} className="opacity-20" />
+              <p className="text-sm font-medium">Cart is empty</p>
+            </div>
+          ) : (
+            cart.map((cartItem) => (
+              <div key={cartItem.cartId} className="flex justify-between items-start bg-white p-3 rounded-lg border border-slate-100 shadow-sm">
+                <div className="flex-1 pr-2">
+                  <h4 className="font-bold text-slate-800">{cartItem.name}</h4>
+                  {cartItem.notes && <p className="text-blue-600 font-medium text-xs mt-1 bg-blue-50 border border-blue-100 inline-block px-1.5 py-0.5 rounded">+ {cartItem.notes}</p>}
+                </div>
+                <div className="flex flex-col items-end gap-2">
+                  <span className="font-bold text-slate-800">Rp {cartItem.finalPrice.toLocaleString('id-ID')}</span>
+                  <button onClick={() => removeFromCart(cartItem.cartId)} className="text-slate-300 hover:text-red-500"><Trash2 size={16} /></button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="p-4 bg-white border-t border-slate-200 shadow-[0_-4px_12px_-4px_rgba(0,0,0,0.05)]">
+          <div className="flex justify-between text-sm mb-2 text-slate-600">
+            <span>Subtotal</span>
+            <span>Rp {subtotal.toLocaleString('id-ID')}</span>
+          </div>
+
+          {appliedDiscounts.length > 0 && (
+            <div className="flex flex-col gap-1 mb-2">
+              {appliedDiscounts.map(disc => (
+                <div key={disc.id} className="flex justify-between items-center text-sm">
+                  <div className="flex items-center gap-1 text-emerald-600">
+                    <button onClick={() => removeDiscount(disc.id)} className="text-slate-400 hover:text-red-500"><X size={14}/></button>
+                    <span>{disc.name} {disc.type === 'percentage' && `(${disc.value}%)`}</span>
+                  </div>
+                  <span className="text-emerald-600 font-medium">- Rp {
+                    (disc.type === 'percentage' ? (subtotal * (disc.value/100)) : disc.value).toLocaleString('id-ID')
+                  }</span>
+                </div>
+              ))}
+            </div>
+          )}
+          
+          <div className="mb-4 pt-2">
+            <button 
+              onClick={() => setIsDiscountModalOpen(true)}
+              disabled={cart.length === 0}
+              className="w-full bg-slate-50 border border-slate-200 py-2.5 rounded-lg text-sm font-semibold hover:bg-slate-100 text-slate-700 transition-colors flex justify-center items-center gap-2 disabled:opacity-50"
+            >
+              <Tag size={16} /> Add / Manage Discounts
+            </button>
+          </div>
+
+          <div className="flex justify-between items-end mb-4 pt-2 border-t border-slate-100">
+            <span className="font-bold text-slate-500 uppercase tracking-wider text-sm">Total</span>
+            <span className="font-black text-2  xl text-blue-600">Rp {finalTotal.toLocaleString('id-ID')}</span>
+          </div>
+
+          <button disabled={cart.length === 0} className="w-full bg-slate-800 disabled:bg-slate-300 text-white font-bold py-4 rounded-xl shadow-md hover:bg-slate-900 transition-colors flex justify-center items-center gap-2 text-lg">
+            <ShoppingBag size={20} /> Charge
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
