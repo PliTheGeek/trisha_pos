@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Coffee, Croissant, Search, ShoppingBag, Trash2, User, X, Tag, Store, History, Settings, Flame, Menu, Banknote, QrCode, CreditCard } from 'lucide-react';
+import { Coffee, Croissant, Search, ShoppingBag, Trash2, User, X, Tag, Store, History, Settings, Flame, Menu, Banknote, QrCode, CreditCard, Bell } from 'lucide-react';
 import Link from 'next/link';
 
 export default function PosInterface() {
@@ -25,6 +25,11 @@ export default function PosInterface() {
     { id: 'D003', name: 'BYO Cup', type: 'flat', value: 5000 },
   ];
 
+  // Dummy incoming QR orders waiting for payment/cashier action
+  const [pendingQrOrders, setPendingQrOrders] = useState([
+    { id: '104', table: 'Table 4', customer: 'Budi', total: 30000, items: '1x Latte' }
+  ]);
+
   // ---------------- STATE ----------------
   const [cart, setCart] = useState<any[]>([]); 
   const [appliedDiscounts, setAppliedDiscounts] = useState<any[]>([]); 
@@ -35,10 +40,11 @@ export default function PosInterface() {
   const [tempOptions, setTempOptions] = useState<any>({}); 
   const [isDiscountModalOpen, setIsDiscountModalOpen] = useState(false); 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false); 
-  
-  // NEW: Checkout State
   const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
   const [cashGiven, setCashGiven] = useState<number | ''>('');
+  
+  // Notification Dropdown State
+  const [isNotifOpen, setIsNotifOpen] = useState(false);
 
   // ---------------- ACTIONS ----------------
   const handleProductClick = (item: any) => {
@@ -77,14 +83,25 @@ export default function PosInterface() {
     setAppliedDiscounts(appliedDiscounts.filter(d => d.id !== discountId));
   };
 
-  // NEW: Finalize Order
   const submitOrder = (paymentMethod: string) => {
     alert(`Order saved to database! Paid via ${paymentMethod}.`);
-    // Reset the POS for the next customer
     setCart([]);
     setAppliedDiscounts([]);
     setIsCheckoutModalOpen(false);
     setCashGiven('');
+  };
+
+  // Pull a pending QR order directly into the cashier's cart to check out
+  const loadQrOrderToCart = (order: any) => {
+    setCart([{
+      cartId: Math.random().toString(),
+      id: 'QR',
+      name: order.items,
+      finalPrice: order.total,
+      notes: `QR Order - ${order.customer} (${order.table})`
+    }]);
+    setPendingQrOrders(pendingQrOrders.filter(o => o.id !== order.id));
+    setIsNotifOpen(false);
   };
 
   // ---------------- MATH LOGIC ----------------
@@ -100,14 +117,12 @@ export default function PosInterface() {
   return (
     <div className="flex flex-col md:flex-row h-screen bg-slate-50 text-slate-800 relative">
       
-      {/* ----------------- MOBILE BURGER DRAWER ----------------- */}
+      {/* MOBILE DRAWER */}
       {isMobileMenuOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 md:hidden flex" onClick={() => setIsMobileMenuOpen(false)}>
           <div className="w-64 bg-white h-full shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h2 className="font-black text-slate-800 flex items-center gap-2">
-                <Coffee className="text-blue-600" size={20} /> TRISHA COFFEA
-              </h2>
+              <h2 className="font-black text-slate-800 flex items-center gap-2"><Coffee className="text-blue-600" size={20} /> TRISHA CAFE</h2>
               <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 bg-slate-200 rounded-full"><X size={16} /></button>
             </div>
             <div className="p-4 flex flex-col gap-2">
@@ -121,7 +136,7 @@ export default function PosInterface() {
         </div>
       )}
 
-      {/* ----------------- MODALS ----------------- */}
+      {/* MODALS */}
       {selectedItem && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
@@ -188,7 +203,6 @@ export default function PosInterface() {
         </div>
       )}
 
-      {/* ----------------- NEW: CHECKOUT MODAL ----------------- */}
       {isCheckoutModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col">
@@ -196,62 +210,37 @@ export default function PosInterface() {
               <h2 className="text-slate-500 font-bold tracking-widest text-sm mb-1 uppercase">Total Amount Due</h2>
               <h1 className="text-5xl font-black text-blue-600 tracking-tight">Rp {finalTotal.toLocaleString('id-ID')}</h1>
             </div>
-            
             <div className="p-6 flex flex-col gap-6">
-              
-              {/* Payment Methods */}
               <div>
                 <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider mb-3">Select Payment Method</h3>
                 <div className="grid grid-cols-3 gap-3">
                   <button onClick={() => submitOrder('QRIS')} className="flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 border-slate-200 hover:border-blue-500 hover:bg-blue-50 transition-colors text-slate-700">
-                    <QrCode size={28} className="text-blue-600" />
-                    <span className="font-bold">QRIS</span>
+                    <QrCode size={28} className="text-blue-600" /><span className="font-bold">QRIS</span>
                   </button>
                   <button onClick={() => submitOrder('Debit/Credit')} className="flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 border-slate-200 hover:border-blue-500 hover:bg-blue-50 transition-colors text-slate-700">
-                    <CreditCard size={28} className="text-slate-500" />
-                    <span className="font-bold text-sm">Debit</span>
+                    <CreditCard size={28} className="text-slate-500" /><span className="font-bold text-sm">Debit</span>
                   </button>
-                  
-                  {/* Cash logic triggers the change calculator below */}
                   <button onClick={() => setCashGiven(finalTotal)} className="flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 border-slate-200 hover:border-emerald-500 hover:bg-emerald-50 transition-colors text-slate-700">
-                    <Banknote size={28} className="text-emerald-600" />
-                    <span className="font-bold">Cash</span>
+                    <Banknote size={28} className="text-emerald-600" /><span className="font-bold">Cash</span>
                   </button>
                 </div>
               </div>
-
-              {/* Cash Calculator (Only shows if cash button was clicked/focused) */}
               {cashGiven !== '' && (
                 <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
                   <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Cash Received</label>
-                  <input 
-                    type="number" 
-                    value={cashGiven}
-                    onChange={(e) => setCashGiven(Number(e.target.value))}
-                    className="w-full text-2xl font-bold bg-white border border-slate-300 rounded-lg p-3 outline-none focus:border-emerald-500 mb-3"
-                  />
+                  <input type="number" value={cashGiven} onChange={(e) => setCashGiven(Number(e.target.value))} className="w-full text-2xl font-bold bg-white border border-slate-300 rounded-lg p-3 outline-none focus:border-emerald-500 mb-3" />
                   <div className="flex justify-between items-center text-lg">
                     <span className="font-bold text-slate-600">Change Due:</span>
                     <span className={`font-black ${Number(cashGiven) >= finalTotal ? 'text-emerald-600' : 'text-red-500'}`}>
                       Rp {Math.max(0, Number(cashGiven) - finalTotal).toLocaleString('id-ID')}
                     </span>
                   </div>
-                  <button 
-                    disabled={Number(cashGiven) < finalTotal}
-                    onClick={() => submitOrder('Cash')}
-                    className="w-full mt-4 bg-emerald-600 disabled:bg-slate-300 text-white font-bold py-3 rounded-lg transition-colors"
-                  >
-                    Confirm Payment
-                  </button>
+                  <button disabled={Number(cashGiven) < finalTotal} onClick={() => submitOrder('Cash')} className="w-full mt-4 bg-emerald-600 disabled:bg-slate-300 text-white font-bold py-3 rounded-lg">Confirm Payment</button>
                 </div>
               )}
-
             </div>
-            
             <div className="p-4 border-t border-slate-100">
-              <button onClick={() => {setIsCheckoutModalOpen(false); setCashGiven('');}} className="w-full bg-slate-100 text-slate-600 font-bold py-3 rounded-xl hover:bg-slate-200 transition-colors">
-                Cancel
-              </button>
+              <button onClick={() => {setIsCheckoutModalOpen(false); setCashGiven('');}} className="w-full bg-slate-100 text-slate-600 font-bold py-3 rounded-xl hover:bg-slate-200">Cancel</button>
             </div>
           </div>
         </div>
@@ -264,7 +253,7 @@ export default function PosInterface() {
           <div className="flex items-center gap-2 md:gap-6">
             <button onClick={() => setIsMobileMenuOpen(true)} className="md:hidden p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg"><Menu size={20} /></button>
             <h1 className="text-xl font-black tracking-tight text-slate-800 flex items-center gap-2">
-              <Coffee className="text-blue-600 hidden md:block" size={24} /> TRISHA COFFEA
+              <Coffee className="text-blue-600 hidden md:block" size={24} /> TRISHA CAFE
             </h1>
             <nav className="hidden md:flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
               <Link href="/" className="px-4 py-1.5 rounded-md text-sm font-bold bg-white text-blue-600 shadow-sm">POS</Link>
@@ -274,9 +263,52 @@ export default function PosInterface() {
               <Link href="/kitchen" className="px-4 py-1.5 rounded-md text-sm font-bold text-slate-500 hover:text-orange-600 hover:bg-orange-100 flex items-center gap-1.5"><Flame size={14} /> KDS</Link>
             </nav>
           </div>
-          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg hidden sm:flex">
-            <Search size={18} className="text-slate-400" />
-            <input type="text" placeholder="Search menu..." className="bg-transparent border-none outline-none text-sm w-32 lg:w-48" />
+
+          <div className="flex items-center gap-3">
+            {/* NOTIFICATION BELL COUNTER */}
+            <div className="relative">
+              <button onClick={() => setIsNotifOpen(!isNotifOpen)} className="p-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-600 relative transition-colors">
+                <Bell size={20} />
+                {pendingQrOrders.length > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-red-500 text-white font-bold text-xs w-5 h-5 rounded-full flex items-center justify-center animate-bounce">
+                    {pendingQrOrders.length}
+                  </span>
+                )}
+              </button>
+
+              {/* Notification Dropdown */}
+              {isNotifOpen && (
+                <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-2xl border border-slate-200 z-50 overflow-hidden">
+                  <div className="p-3 bg-slate-50 border-b border-slate-100 flex justify-between items-center">
+                    <span className="font-bold text-sm text-slate-800">Pending QR Orders</span>
+                    <span className="bg-red-100 text-red-600 text-xs font-bold px-2 py-0.5 rounded-full">{pendingQrOrders.length} new</span>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto divide-y divide-slate-100">
+                    {pendingQrOrders.length === 0 ? (
+                      <div className="p-4 text-center text-slate-400 text-sm">No pending QR orders</div>
+                    ) : (
+                      pendingQrOrders.map(order => (
+                        <div key={order.id} onClick={() => loadQrOrderToCart(order)} className="p-3 hover:bg-blue-50/50 cursor-pointer transition-colors flex justify-between items-center">
+                          <div>
+                            <h4 className="font-bold text-sm text-slate-800">{order.table} ({order.customer})</h4>
+                            <p className="text-xs text-slate-500">{order.items}</p>
+                          </div>
+                          <div className="text-right">
+                            <span className="font-bold text-blue-600 text-sm block">Rp {order.total.toLocaleString('id-ID')}</span>
+                            <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-1.5 py-0.5 rounded">Checkout</span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg hidden sm:flex">
+              <Search size={18} className="text-slate-400" />
+              <input type="text" placeholder="Search menu..." className="bg-transparent border-none outline-none text-sm w-28 lg:w-36" />
+            </div>
           </div>
         </header>
 
