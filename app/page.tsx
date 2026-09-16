@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Coffee, Croissant, Search, ShoppingBag, Trash2, User, X, Tag, Store, History, Settings, Flame, Menu, Banknote, QrCode, CreditCard, Bell } from 'lucide-react';
 import Link from 'next/link';
+import Image from 'next/image';
 
 export default function PosInterface() {
 
@@ -122,7 +123,6 @@ export default function PosInterface() {
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 md:hidden flex" onClick={() => setIsMobileMenuOpen(false)}>
           <div className="w-64 bg-white h-full shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h2 className="font-black text-slate-800 flex items-center gap-2"><Coffee className="text-blue-600" size={20} /> TRISHA CAFE</h2>
               <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 bg-slate-200 rounded-full"><X size={16} /></button>
             </div>
             <div className="p-4 flex flex-col gap-2">
@@ -252,8 +252,8 @@ export default function PosInterface() {
         <header className="bg-white p-4 flex justify-between items-center z-10 border-b border-slate-100">
           <div className="flex items-center gap-2 md:gap-6">
             <button onClick={() => setIsMobileMenuOpen(true)} className="md:hidden p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg"><Menu size={20} /></button>
-            <h1 className="text-xl font-black tracking-tight text-slate-800 flex items-center gap-2">
-              <Coffee className="text-blue-600 hidden md:block" size={24} /> TRISHA CAFE
+            <h1 className="text-x2 font-black tracking-tight text-slate-800 flex items-center gap-2">
+              <Image src="/logo/logo.png" alt="Trisha Cafe Logo" width={28} height={28} className="object-contain" /> TRISHA POS
             </h1>
             <nav className="hidden md:flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
               <Link href="/" className="px-4 py-1.5 rounded-md text-sm font-bold bg-white text-blue-600 shadow-sm">POS</Link>
