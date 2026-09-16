@@ -1,28 +1,57 @@
 'use client'; 
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowLeft, Edit, Plus, Tags, Trash2, Percent, X } from 'lucide-react';
 import Link from 'next/link';
 
 export default function ManageInterface() {
   const [activeTab, setActiveTab] = useState('menu'); 
   const [editingId, setEditingId] = useState<string | null>(null); 
+  const [menuItems, setMenuItems] = useState<any[]>([]);
+  const [isLoadingMenu, setIsLoadingMenu] = useState(true);
   
   // NEW: State to hold our dynamic options while editing/creating a menu item
   const [editOptions, setEditOptions] = useState<any[]>([]);
 
-  // Dummy Data
-  const menuItems = [
-    { id: 'M001', name: 'V60 Filter', category: 'Coffee', price: 35000, cogs: 12000, options: [] },
-    { 
-      id: 'M002', name: 'Latte', category: 'Coffee', price: 30000, cogs: 11000, 
-      options: [
-        { group: 'Temperature', choices: [{ name: 'Hot', addPrice: 0 }, { name: 'Iced', addPrice: 3000 }] },
-        { group: 'Milk Type', choices: [{ name: 'Fresh Milk', addPrice: 0 }, { name: 'Oat Milk', addPrice: 8000 }] }
-      ] 
-    },
-    { id: 'M004', name: 'Butter Croissant', category: 'Snack', price: 25000, cogs: 15000, options: [] },
-  ];
+  useEffect(() => {
+    async function getMenuItems() {
+      try {
+        const sheetUrl = process.env.NEXT_PUBLIC_GOOGLE_SHEETS_URL;
+
+        if (!sheetUrl) {
+          throw new Error('NEXT_PUBLIC_GOOGLE_SHEETS_URL is not configured');
+        }
+
+        const response = await fetch(`${sheetUrl}?action=menu`, {
+          method: 'GET',
+          cache: 'no-store',
+        });
+
+        if (!response.ok) {
+          throw new Error(`Menu request failed with status ${response.status}`);
+        }
+
+        const data = await response.json();
+        const rows = Array.isArray(data) ? data : data.menu || data.data || [];
+
+        setMenuItems(rows.map((item: any) => ({
+          ...item,
+          id: item.id ?? item.product_id,
+          name: item.name ?? item.product_name ?? item.product_id,
+          price: Number(item.price) || 0,
+          cogs: Number(item.cogs) || 0,
+          options: item.options || [],
+        })));
+      } catch (error) {
+        console.error('Failed to load menu:', error);
+        setMenuItems([]);
+      } finally {
+        setIsLoadingMenu(false);
+      }
+    }
+
+    getMenuItems();
+  }, []);
 
   const discountItems = [
     { id: 'D001', name: 'Opening Promo', type: 'percentage', value: 10, status: 'Active' },
@@ -128,7 +157,15 @@ export default function ManageInterface() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {menuItems.map((item) => (
+                  {isLoadingMenu ? (
+                    <tr>
+                      <td colSpan={4} className="p-6 text-center text-sm text-slate-400">Loading menu...</td>
+                    </tr>
+                  ) : menuItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="p-6 text-center text-sm text-slate-400">No menu items found.</td>
+                    </tr>
+                  ) : menuItems.map((item) => (
                     <tr key={item.id} className="hover:bg-slate-50 transition-colors">
                       <td className="p-4 font-medium text-slate-800">
                         {item.name}
