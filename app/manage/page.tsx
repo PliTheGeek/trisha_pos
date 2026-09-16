@@ -1,7 +1,7 @@
 'use client'; 
 
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Edit, Plus, Tags, Trash2, Percent, X } from 'lucide-react';
+import { ArrowLeft, Edit, Plus, Tags, Trash2, Percent } from 'lucide-react';
 import Link from 'next/link';
 
 export default function ManageInterface() {
@@ -9,9 +9,27 @@ export default function ManageInterface() {
   const [editingId, setEditingId] = useState<string | null>(null); 
   const [menuItems, setMenuItems] = useState<any[]>([]);
   const [isLoadingMenu, setIsLoadingMenu] = useState(true);
-  
-  // NEW: State to hold our dynamic options while editing/creating a menu item
-  const [editOptions, setEditOptions] = useState<any[]>([]);
+
+
+  type MenuForm = {
+    name: string;
+    category: string;
+    price: string;
+    cogs: string;
+    description: string;
+  };
+
+  const emptyForm: MenuForm = {
+    name: '',
+    category: 'Coffee',
+    price: '',
+    cogs: '',
+    description: '',
+  };
+
+  const [menuForm, setMenuForm] = useState<MenuForm>(emptyForm);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveMessage, setSaveMessage] = useState('');
 
   useEffect(() => {
     async function getMenuItems() {
@@ -34,14 +52,14 @@ export default function ManageInterface() {
         const data = await response.json();
         const rows = Array.isArray(data) ? data : data.menu || data.data || [];
 
-        setMenuItems(rows.map((item: any) => ({
-          ...item,
-          id: item.id ?? item.product_id,
-          name: item.name ?? item.product_name ?? item.product_id,
-          price: Number(item.price) || 0,
-          cogs: Number(item.cogs) || 0,
-          options: item.options || [],
-        })));
+      setMenuItems(rows.map((item: any) => ({
+        ...item,
+        id: String(item.id ?? item.product_id),
+        name: item.name ?? item.product_name ?? item.product_id,
+        price: Number(item.price) || 0,
+        cogs: Number(item.cogs) || 0,
+        description: item.description ?? '',
+      })));
       } catch (error) {
         console.error('Failed to load menu:', error);
         setMenuItems([]);
@@ -61,60 +79,151 @@ export default function ManageInterface() {
   const currentEditMenu = menuItems.find(item => item.id === editingId);
   const currentEditDisc = discountItems.find(item => item.id === editingId);
 
+
+  const handleDeleteMenu = async (item: any) => {
+  const confirmed = window.confirm(
+    `Delete "${item.name}"? This action cannot be undone.`
+  );
+
+  if (!confirmed) {
+    return;
+  }
+
+  const sheetUrl = process.env.NEXT_PUBLIC_GOOGLE_SHEETS_URL;
+
+  if (!sheetUrl) {
+    return;
+  }
+
+  try {
+    const payload = new URLSearchParams({
+      action: 'deleteMenu',
+      id: String(item.id),
+    });
+
+    const response = await fetch(sheetUrl, {
+      method: 'POST',
+      body: payload,
+    });
+
+    const result = await response.json();
+
+    if (!response.ok || result.success === false) {
+      throw new Error(result.message || 'Failed to delete product.');
+    }
+
+    setMenuItems((currentItems) =>
+      currentItems.filter(
+        (currentItem) => String(currentItem.id) !== String(item.id)
+      )
+    );
+
+    if (String(editingId) === String(item.id)) {
+      handleAddNewMenu();
+    }
+  } catch (error) {
+    setSaveMessage(
+      error instanceof Error
+        ? error.message
+        : 'Failed to delete product.'
+    );
+  }
+};
+
   // ---------------- FORM BUILDER ACTIONS ----------------
 
   // When clicking Edit on a Menu Item
   const handleEditMenu = (item: any) => {
     setEditingId(item.id);
-    // Load the item's options into the form state (or empty array if none)
-    setEditOptions(item.options ? JSON.parse(JSON.stringify(item.options)) : []); 
+    setMenuForm({
+      name: item.name,
+      category: item.category,
+      price: String(item.price),
+      cogs: String(item.cogs),
+      description: item.description,
+    });
+
+    setSaveMessage('');
   };
 
-  // When clicking the (+) Add New button
   const handleAddNewMenu = () => {
     setEditingId(null);
-    setEditOptions([]); // Clear the form options
+    setMenuForm(emptyForm);
+    setSaveMessage('');
   };
 
-  // Add a new empty group (e.g., "Size")
-  const addOptionGroup = () => {
-    setEditOptions([...editOptions, { group: '', choices: [{ name: '', addPrice: 0 }] }]);
-  };
+const handleSaveMenu = async () => {
+  const sheetUrl = process.env.NEXT_PUBLIC_GOOGLE_SHEETS_URL;
 
-  // Remove an entire group
-  const removeOptionGroup = (groupIndex: number) => {
-    const newOptions = [...editOptions];
-    newOptions.splice(groupIndex, 1);
-    setEditOptions(newOptions);
-  };
+  if (!sheetUrl) {
+    setSaveMessage('Google Sheets URL belum dikonfigurasi.');
+    return;
+  }
 
-  // Update Group Name
-  const updateGroupName = (groupIndex: number, newName: string) => {
-    const newOptions = [...editOptions];
-    newOptions[groupIndex].group = newName;
-    setEditOptions(newOptions);
-  };
+  if (!menuForm.name.trim()) {
+    setSaveMessage('Nama produk wajib diisi.');
+    return;
+  }
 
-  // Add a choice to a specific group
-  const addChoice = (groupIndex: number) => {
-    const newOptions = [...editOptions];
-    newOptions[groupIndex].choices.push({ name: '', addPrice: 0 });
-    setEditOptions(newOptions);
-  };
+  setIsSaving(true);
+  setSaveMessage('');
 
-  // Remove a choice from a specific group
-  const removeChoice = (groupIndex: number, choiceIndex: number) => {
-    const newOptions = [...editOptions];
-    newOptions[groupIndex].choices.splice(choiceIndex, 1);
-    setEditOptions(newOptions);
-  };
+  try {
+    const payload = new URLSearchParams({
+      action: editingId ? 'updateMenu' : 'createMenu',
+      id: editingId ?? '',
+      name: menuForm.name.trim(),
+      category: menuForm.category,
+      price: menuForm.price || '0',
+      cogs: menuForm.cogs || '0',
+      description: menuForm.description.trim(),
+    });
 
-  // Update Choice Data (Name or Price)
-  const updateChoice = (groupIndex: number, choiceIndex: number, field: string, value: any) => {
-    const newOptions = [...editOptions];
-    newOptions[groupIndex].choices[choiceIndex][field] = value;
-    setEditOptions(newOptions);
-  };
+    const response = await fetch(sheetUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      },
+      body: payload.toString(),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok || result.success === false) {
+      throw new Error(result.message || 'Gagal menyimpan produk.');
+    }
+
+    const savedItem = {
+      id: editingId ?? result.id,
+      name: menuForm.name.trim(),
+      category: menuForm.category,
+      price: Number(menuForm.price) || 0,
+      cogs: Number(menuForm.cogs) || 0,
+      description: menuForm.description.trim(),
+    };
+
+    setMenuItems((currentItems) =>
+      editingId
+        ? currentItems.map((item) =>
+            String(item.id) === String(editingId) ? savedItem : item
+          )
+        : [...currentItems, savedItem]
+    );
+
+    setSaveMessage('Produk berhasil disimpan.');
+
+    if (!editingId) {
+      setMenuForm(emptyForm);
+    }
+  } catch (error) {
+    setSaveMessage(
+      error instanceof Error ? error.message : 'Gagal menyimpan produk.'
+    );
+  } finally {
+    setIsSaving(false);
+  }
+};
+
 
 
   return (
@@ -169,16 +278,18 @@ export default function ManageInterface() {
                     <tr key={item.id} className="hover:bg-slate-50 transition-colors">
                       <td className="p-4 font-medium text-slate-800">
                         {item.name}
-                        {item.options && item.options.length > 0 && (
-                           <span className="ml-2 text-[10px] font-bold uppercase tracking-wider text-blue-500 bg-blue-50 px-2 py-0.5 rounded">Customizable</span>
-                        )}
                       </td>
                       <td className="p-4"><span className="px-2 py-1 bg-slate-100 text-slate-600 text-xs rounded-md">{item.category}</span></td>
                       <td className="p-4 font-medium text-blue-600">Rp {item.price.toLocaleString('id-ID')}</td>
                       <td className="p-4 text-right">
                         {/* Edit Button triggers the state load */}
                         <button onClick={() => handleEditMenu(item)} className="p-2 text-slate-400 hover:text-blue-600"><Edit size={16} /></button>
-                        <button className="p-2 text-slate-400 hover:text-red-600"><Trash2 size={16} /></button>
+                        <button
+                          onClick={() => handleDeleteMenu(item)}
+                          className="p-2 text-slate-400 hover:text-red-600"
+                          title="Delete product">
+                          <Trash2 size={16} />
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -235,11 +346,25 @@ export default function ManageInterface() {
             <form key={editingId || 'new'} className="flex flex-col gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-500 mb-1">Item Name</label>
-                <input type="text" defaultValue={currentEditMenu?.name || ''} placeholder="e.g. V60 Filter" className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-500" />
+                <input
+                  type="text"
+                  value={menuForm.name}
+                  onChange={(e) =>
+                    setMenuForm({ ...menuForm, name: e.target.value })
+                  }
+                  placeholder="e.g. V60 Filter"
+                  className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-500"
+                />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-500 mb-1">Category</label>
-                <select defaultValue={currentEditMenu?.category || 'Coffee'} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-500 bg-white">
+                <select
+                  value={menuForm.category}
+                  onChange={(e) =>
+                    setMenuForm({ ...menuForm, category: e.target.value })
+                  }
+                  className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-500 bg-white"
+                >
                   <option>Coffee</option>
                   <option>Snack</option>
                   <option>Retail</option>
@@ -248,86 +373,62 @@ export default function ManageInterface() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 mb-1">Selling Price</label>
-                  <input type="number" defaultValue={currentEditMenu?.price || ''} placeholder="35000" className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-500" />
+                  <input
+                    type="number"
+                    value={menuForm.price}
+                    onChange={(e) =>
+                      setMenuForm({ ...menuForm, price: e.target.value })
+                    }
+                    placeholder="35000"
+                    className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-500"
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 mb-1">COGS</label>
-                  <input type="number" defaultValue={currentEditMenu?.cogs || ''} placeholder="12000" className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-500" />
+                  <input
+                    type="number"
+                    value={menuForm.cogs}
+                    onChange={(e) =>
+                      setMenuForm({ ...menuForm, cogs: e.target.value })
+                    }
+                    placeholder="12000"
+                    className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-500"
+                  />
                 </div>
               </div>
+            <div className="pt-4 mt-2 border-t border-slate-100">
+              <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide mb-3">
+                Description
+              </label>
+                <textarea
+                  value={menuForm.description}
+                  onChange={(e) =>
+                    setMenuForm({ ...menuForm, description: e.target.value })
+                  }
+                  placeholder="Food or drink description"
+                  rows={4}
+                  className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-500 resize-none"
+                />
+            </div>
+            <button
+              type="button"
+              onClick={handleSaveMenu}
+              disabled={isSaving}
+              className="mt-4 w-full bg-slate-800 text-white font-bold py-4 rounded-xl hover:bg-slate-900 transition-colors shadow-md text-lg disabled:opacity-50"
+            >
+              {isSaving
+                ? 'Saving...'
+                : editingId
+                  ? 'Save Changes'
+                  : 'Save New Item'}
+            </button>
 
-              {/* DYNAMIC CUSTOM OPTIONS BUILDER */}
-              <div className="pt-4 mt-2 border-t border-slate-100">
-                <div className="flex justify-between items-center mb-3">
-                  <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide">Custom Options</label>
-                  <button type="button" onClick={addOptionGroup} className="text-xs text-blue-600 font-bold flex items-center gap-1 bg-blue-50 px-3 py-1.5 rounded-md hover:bg-blue-100 transition-colors">
-                    <Plus size={14} /> Add Group
-                  </button>
-                </div>
-
-                {/* Map through the options state */}
-                {editOptions.length === 0 ? (
-                   <div className="text-center p-4 border border-dashed border-slate-300 rounded-lg text-sm text-slate-400 bg-slate-50/50">
-                     No custom options. Click "Add Group" to create modifiers (e.g., Milk Type, Size).
-                   </div>
-                ) : (
-                  editOptions.map((optGroup, gIndex) => (
-                    <div key={gIndex} className="bg-slate-50 p-4 rounded-xl border border-slate-200 mb-4 shadow-sm">
-                      
-                      {/* Group Header (e.g., "Milk Type") */}
-                      <div className="flex justify-between items-center mb-3 gap-2">
-                        <input
-                          type="text"
-                          value={optGroup.group}
-                          onChange={(e) => updateGroupName(gIndex, e.target.value)}
-                          placeholder="Group Name (e.g., Milk Type)"
-                          className="w-full bg-white border border-slate-300 rounded-md p-2 text-sm font-bold text-slate-800 outline-none focus:border-blue-500"
-                        />
-                        <button type="button" onClick={() => removeOptionGroup(gIndex)} className="p-2 text-slate-400 hover:text-red-500 bg-white rounded-md border border-slate-200 hover:border-red-200 transition-colors">
-                          <Trash2 size={16}/>
-                        </button>
-                      </div>
-                      
-                      {/* Choices List (e.g., "Oat Milk", "+8000") */}
-                      <div className="flex flex-col gap-2 pl-2 border-l-2 border-slate-200">
-                        {optGroup.choices.map((choice: any, cIndex: number) => (
-                          <div key={cIndex} className="flex gap-2 items-center">
-                            <input 
-                              type="text" 
-                              value={choice.name}
-                              onChange={(e) => updateChoice(gIndex, cIndex, 'name', e.target.value)}
-                              placeholder="Option (e.g., Oat Milk)" 
-                              className="flex-1 border border-slate-300 rounded-md p-2 text-sm outline-none focus:border-blue-500"
-                            />
-                            <div className="relative w-28">
-                              <span className="absolute left-2 top-2 text-xs text-slate-400">+Rp</span>
-                              <input 
-                                type="number" 
-                                value={choice.addPrice === 0 ? '' : choice.addPrice} // hide 0 for cleaner look
-                                onChange={(e) => updateChoice(gIndex, cIndex, 'addPrice', Number(e.target.value))}
-                                placeholder="0" 
-                                className="w-full border border-slate-300 rounded-md p-2 pl-8 text-sm outline-none focus:border-blue-500"
-                              />
-                            </div>
-                            <button type="button" onClick={() => removeChoice(gIndex, cIndex)} className="p-1.5 text-slate-400 hover:text-red-500 transition-colors">
-                              <X size={18}/>
-                            </button>
-                          </div>
-                        ))}
-                        
-                        <button type="button" onClick={() => addChoice(gIndex)} className="text-xs text-blue-600 font-semibold hover:text-blue-700 bg-blue-50/50 py-2 rounded-md border border-dashed border-blue-200 mt-1 transition-colors text-left pl-3">
-                          + Add Option
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              <button type="button" className="mt-4 w-full bg-slate-800 text-white font-bold py-4 rounded-xl hover:bg-slate-900 transition-colors shadow-md text-lg">
-                {editingId ? 'Save Changes' : 'Save New Item'}
-              </button>
-            </form>
+          {saveMessage && (
+            <p className="text-sm text-center text-slate-500">
+              {saveMessage}
+            </p>
+          )}
+          </form>
           ) : (
             /* DISCOUNT FORM (Unchanged) */
             <form key={editingId || 'newDisc'} className="flex flex-col gap-4">
