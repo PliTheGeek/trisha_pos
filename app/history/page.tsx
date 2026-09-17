@@ -1,58 +1,124 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowLeft, Calendar, FileText, TrendingUp, Search, Filter, X, Receipt, CreditCard, CheckCircle } from 'lucide-react';
 import Link from 'next/link';
+
+const groupHistoryRows = (rows: any[]) => {
+  const grouped = new Map<string, any>();
+
+  rows.forEach((row, index) => {
+    const orderId = String(row.order_id ?? `unknown-${index}`);
+    const quantity = Number(row.qty) || 0;
+    const price = Number(row.price) || 0;
+    const discount = Number(row.discount_value) || 0;
+    const existing = grouped.get(orderId);
+
+    if (existing) {
+      existing.subtotal += quantity * price;
+      existing.discount += discount;
+      existing.total += quantity * price - discount;
+      existing.items.push({
+        qty: quantity,
+        name: row.product_name ?? row.name ?? `Product ${row.product_id ?? ''}`,
+        price,
+        notes: row.order_note ?? '',
+      });
+      return;
+    }
+
+    const status = String(row.status ?? 'Paid');
+    const date = row.created_at ?? row.order_date ?? 'Recorded';
+
+    grouped.set(orderId, {
+      id: orderId,
+      date,
+      time: row.order_time ?? '',
+      dateGroup: row.date_group ?? 'All Time',
+      subtotal: quantity * price,
+      discount,
+      total: quantity * price - discount,
+      method: row.payment_method ?? '-',
+      status,
+      cashReceived: Number(row.cash_received) || 0,
+      changeDue: Number(row.change_due) || 0,
+      cashier: row.cashier ?? '-',
+      table: row.table_number ?? row.table ?? 'Takeaway',
+      items: [{
+        qty: quantity,
+        name: row.product_name ?? row.name ?? `Product ${row.product_id ?? ''}`,
+        price,
+        notes: row.order_note ?? '',
+      }],
+    });
+  });
+
+  return Array.from(grouped.values()).reverse();
+};
 
 export default function HistoryInterface() {
   // ---------------- STATE ----------------
   const [searchQuery, setSearchQuery] = useState('');
-  const [dateFilter, setDateFilter] = useState('Today'); // Today, This Month, All Time
+  const [dateFilter, setDateFilter] = useState('All Time'); // Today, This Month, All Time
   const [paymentFilter, setPaymentFilter] = useState('All'); // All, QRIS, Cash, Other, Open Bill
   const [statusFilter, setStatusFilter] = useState('All'); // All, Paid, Pending, Voided
   
   const [selectedOrder, setSelectedOrder] = useState<any>(null); // Controls the Receipt Modal
 
-  // ---------------- DUMMY DATA ----------------
-  const [logs, setLogs] = useState([
-    { 
-      id: '104', date: '21 Aug 2026', time: '10:45 AM', dateGroup: 'Today',
-      subtotal: 30000, discount: 0, total: 30000, 
-      method: '-', status: 'Pending', cashier: '-', table: 'Table 4',
-      items: [{ qty: 1, name: 'Latte', price: 30000, notes: 'Iced, Oat Milk' }]
-    },
-    { 
-      id: '101', date: '21 Aug 2026', time: '10:15 AM', dateGroup: 'Today',
-      subtotal: 70000, discount: 0, total: 70000, 
-      method: 'QRIS', status: 'Paid', cashier: 'Trisha', table: 'Table 2',
-      items: [{ qty: 2, name: 'V60 Filter', price: 70000, notes: '' }]
-    },
-    { 
-      id: '102', date: '21 Aug 2026', time: '10:30 AM', dateGroup: 'Today',
-      subtotal: 55000, discount: 17000, total: 38000, 
-      method: 'Cash', status: 'Paid', cashier: 'Trisha', table: 'Takeaway',
-      items: [
-        { qty: 1, name: 'Latte', price: 30000, notes: 'Iced' },
-        { qty: 1, name: 'Butter Croissant', price: 25000, notes: '' }
-      ]
-    },
-    { 
-      id: '099', date: '20 Aug 2026', time: '17:05 PM', dateGroup: 'This Month',
-      subtotal: 30000, discount: 0, total: 0, 
-      method: '-', status: 'Voided', cashier: 'Trisha', table: 'Table 1',
-      items: [{ qty: 1, name: 'Latte', price: 30000, notes: 'Hot' }]
-    },
-  ]);
+  const [logs, setLogs] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+
+  useEffect(() => {
+    async function loadHistory() {
+      try {
+        const response = await fetch('/api/history', { cache: 'no-store' });
+        const data = await response.json();
+
+        if (!response.ok || data.success === false) {
+          throw new Error(data.message || 'Failed to load history.');
+        }
+
+        const rows = Array.isArray(data) ? data : data.history || data.data || [];
+        setLogs(groupHistoryRows(rows));
+      } catch (error) {
+        setLoadError(error instanceof Error ? error.message : 'Failed to load history.');
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    loadHistory();
+  }, []);
 
   // ---------------- ACTIONS ----------------
-  const markAsPaid = (orderId: string, method: string) => {
-    setLogs(logs.map(log => {
-      if (log.id === orderId) {
-        return { ...log, status: 'Paid', method: method, cashier: 'Trisha' };
+  const markAsPaid = async (orderId: string, method: string) => {
+    try {
+      const payload = new URLSearchParams({
+        action: 'updateOrderStatus',
+        order_id: orderId,
+        payment_method: method,
+        status: 'Paid',
+      });
+      const response = await fetch('/api/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+        body: payload.toString(),
+      });
+      const result = await response.json();
+
+      if (!response.ok || result.success === false) {
+        throw new Error(result.message || 'Failed to update order status.');
       }
-      return log;
-    }));
-    setSelectedOrder(null);
+
+      setLogs(currentLogs => currentLogs.map(log => log.id === orderId
+        ? { ...log, status: 'Paid', method, cashier: 'Trisha' }
+        : log
+      ));
+      setSelectedOrder(null);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Failed to update order status.');
+    }
   };
 
   // ---------------- FILTER LOGIC ----------------
@@ -121,15 +187,24 @@ export default function HistoryInterface() {
                   <span>Total Due</span>
                   <span>Rp {selectedOrder.total.toLocaleString('id-ID')}</span>
                 </div>
+                {selectedOrder.method === 'Cash' && (
+                  <>
+                    <div className="flex justify-between text-slate-600 mt-2">
+                      <span>Cash Received</span>
+                      <span>Rp {selectedOrder.cashReceived.toLocaleString('id-ID')}</span>
+                    </div>
+                    <div className="flex justify-between font-bold text-emerald-600">
+                      <span>Change</span>
+                      <span>Rp {selectedOrder.changeDue.toLocaleString('id-ID')}</span>
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Status & Quick Action */}
-              {selectedOrder.method === 'Open Bill' ? (
-                <div className="p-3 rounded-lg flex items-center justify-center gap-2 font-bold text-sm bg-amber-50 text-amber-700 border border-amber-100">
-                  OPEN BILL
-                </div>
-              ) : selectedOrder.status === 'Pending' ? (
+              {selectedOrder.status === 'Pending' ? (
                 <div className="flex flex-col gap-2">
+                  {selectedOrder.method === 'Open Bill' && <div className="p-3 rounded-lg text-center font-bold text-sm bg-amber-50 text-amber-700 border border-amber-100">OPEN BILL</div>}
                   <p className="text-xs font-bold text-amber-600 text-center uppercase tracking-wide">Customer is waiting to pay</p>
                   <div className="grid grid-cols-2 gap-2">
                     <button onClick={() => markAsPaid(selectedOrder.id, 'Cash')} className="bg-emerald-600 text-white font-bold py-2.5 rounded-lg text-sm hover:bg-emerald-700">
@@ -162,7 +237,7 @@ export default function HistoryInterface() {
         </div>
         <div className="flex items-center gap-2 bg-white border border-slate-200 px-4 py-2 rounded-lg text-sm font-medium">
           <Calendar size={16} className="text-slate-400" />
-          Today: 21 Aug 2026
+          History from Google Sheets
         </div>
       </header>
 
@@ -249,7 +324,15 @@ export default function HistoryInterface() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 text-sm">
-            {filteredLogs.length === 0 ? (
+            {isLoading ? (
+              <tr>
+                <td colSpan={6} className="p-8 text-center text-slate-500">Loading history...</td>
+              </tr>
+            ) : loadError ? (
+              <tr>
+                <td colSpan={6} className="p-8 text-center text-red-600">{loadError}</td>
+              </tr>
+            ) : filteredLogs.length === 0 ? (
               <tr>
                 <td colSpan={6} className="p-8 text-center text-slate-500">No transactions found matching your filters.</td>
               </tr>

@@ -171,6 +171,8 @@ export default function PosInterface() {
         action: 'createOrder',
         payment_method: paymentMethod,
         status: paymentMethod === 'Open Bill' ? 'Pending' : 'Paid',
+        cash_received: paymentMethod === 'Cash' ? String(cashGiven || 0) : '0',
+        change_due: paymentMethod === 'Cash' ? String(Math.max(0, Number(cashGiven || 0) - finalTotal)) : '0',
         subtotal: String(subtotal),
         discount_value: String(totalDiscountAmount),
         total: String(finalTotal),
