@@ -8,7 +8,7 @@ export default function HistoryInterface() {
   // ---------------- STATE ----------------
   const [searchQuery, setSearchQuery] = useState('');
   const [dateFilter, setDateFilter] = useState('Today'); // Today, This Month, All Time
-  const [paymentFilter, setPaymentFilter] = useState('All'); // All, QRIS, Cash
+  const [paymentFilter, setPaymentFilter] = useState('All'); // All, QRIS, Cash, Other, Open Bill
   const [statusFilter, setStatusFilter] = useState('All'); // All, Paid, Pending, Voided
   
   const [selectedOrder, setSelectedOrder] = useState<any>(null); // Controls the Receipt Modal
@@ -124,7 +124,11 @@ export default function HistoryInterface() {
               </div>
 
               {/* Status & Quick Action */}
-              {selectedOrder.status === 'Pending' ? (
+              {selectedOrder.method === 'Open Bill' ? (
+                <div className="p-3 rounded-lg flex items-center justify-center gap-2 font-bold text-sm bg-amber-50 text-amber-700 border border-amber-100">
+                  OPEN BILL
+                </div>
+              ) : selectedOrder.status === 'Pending' ? (
                 <div className="flex flex-col gap-2">
                   <p className="text-xs font-bold text-amber-600 text-center uppercase tracking-wide">Customer is waiting to pay</p>
                   <div className="grid grid-cols-2 gap-2">
@@ -213,6 +217,8 @@ export default function HistoryInterface() {
               <option value="All">All Payments</option>
               <option value="QRIS">QRIS</option>
               <option value="Cash">Cash</option>
+              <option value="Other">Other</option>
+              <option value="Open Bill">Open Bill</option>
             </select>
           </div>
 
