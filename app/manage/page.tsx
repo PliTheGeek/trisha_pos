@@ -366,6 +366,7 @@ const handleSaveMenu = async () => {
                   className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-500 bg-white"
                 >
                   <option>Coffee</option>
+                  <option>Non-Coffee</option>
                   <option>Snack</option>
                   <option>Retail</option>
                 </select>
