@@ -6,7 +6,11 @@ import { getSupabaseAnonKey, getSupabaseUrl } from '@/lib/supabase/config';
 
 export async function proxy(request: NextRequest) {
   const response = await updateSupabaseSession(request);
-  if (request.nextUrl.pathname === '/login' || request.nextUrl.pathname.startsWith('/api/')) return response;
+  if (
+    request.nextUrl.pathname === '/login'
+    || request.nextUrl.pathname === '/manifest.webmanifest'
+    || request.nextUrl.pathname.startsWith('/api/')
+  ) return response;
 
   const supabase = createServerClient(getSupabaseUrl(), getSupabaseAnonKey(), {
     cookies: {
@@ -21,6 +25,6 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 };

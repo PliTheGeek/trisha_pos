@@ -20,6 +20,7 @@ export default function PwaInstallPrompt() {
   const [installEvent, setInstallEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const [visible, setVisible] = useState(false);
   const [iosGuide, setIosGuide] = useState(false);
+  const [manualGuide, setManualGuide] = useState(false);
 
   useEffect(() => {
     if (isStandalone() || window.localStorage.getItem(DISMISSED_KEY) === 'true') return;
@@ -31,8 +32,14 @@ export default function PwaInstallPrompt() {
     };
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    const fallbackTimer = window.setTimeout(() => {
+      if (!isStandalone() && !isIosDevice()) {
+        setManualGuide(true);
+        setVisible(true);
+      }
+    }, 1500);
 
-    const isIos = /iphone|ipad|ipod/i.test(window.navigator.userAgent);
+    const isIos = isIosDevice();
     const isSafari = /safari/i.test(window.navigator.userAgent)
       && !/crios|fxios|edgios/i.test(window.navigator.userAgent);
     const iosTimer = isIos && isSafari
@@ -44,6 +51,7 @@ export default function PwaInstallPrompt() {
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.clearTimeout(fallbackTimer);
       if (iosTimer) window.clearTimeout(iosTimer);
     };
   }, []);
@@ -54,7 +62,10 @@ export default function PwaInstallPrompt() {
   }
 
   async function install() {
-    if (!installEvent) return;
+    if (!installEvent) {
+      setManualGuide(true);
+      return;
+    }
     await installEvent.prompt();
     const choice = await installEvent.userChoice;
     if (choice.outcome === 'accepted') setVisible(false);
@@ -76,16 +87,24 @@ export default function PwaInstallPrompt() {
             <p className="mt-1 text-sm text-slate-500">
               Tap <Share size={14} className="mx-1 inline-block" /> Share, then choose <strong>Add to Home Screen</strong>.
             </p>
+          ) : manualGuide ? (
+            <p className="mt-1 text-sm text-slate-500">
+              Open the browser menu <strong>⋮</strong>, then choose <strong>Install app</strong> or <strong>Add to Home screen</strong>.
+            </p>
           ) : (
             <p className="mt-1 text-sm text-slate-500">Add POS to your home screen for faster access.</p>
           )}
         </div>
       </div>
-      {!iosGuide && (
+      {!iosGuide && !manualGuide && (
         <button onClick={() => void install()} className="mt-4 inline-flex w-full items-center justify-center gap-2 border border-blue-600 bg-blue-600 p-2.5 text-sm font-bold text-white shadow-sm hover:bg-blue-700">
           <Download size={16} /> Install app
         </button>
       )}
     </aside>
   );
+}
+
+function isIosDevice() {
+  return /iphone|ipad|ipod/i.test(window.navigator.userAgent);
 }
