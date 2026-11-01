@@ -1,376 +1,166 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { ArrowLeft, Calendar, FileText, TrendingUp, Search, Filter, X, Receipt, CreditCard, CheckCircle } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { ArrowLeft, Check, Download, Printer, Receipt, X } from 'lucide-react';
 import Link from 'next/link';
+import { closeOpenBill, listTransactions } from '@/app/actions/transactions';
 
-const groupHistoryRows = (rows: any[]) => {
-  const grouped = new Map<string, any>();
-
-  rows.forEach((row, index) => {
-    const orderId = String(row.order_id ?? `unknown-${index}`);
-    const quantity = Number(row.qty) || 0;
-    const price = Number(row.price) || 0;
-    const discount = Number(row.discount_value) || 0;
-    const existing = grouped.get(orderId);
-
-    if (existing) {
-      existing.subtotal += quantity * price;
-      existing.discount += discount;
-      existing.total += quantity * price - discount;
-      existing.items.push({
-        qty: quantity,
-        name: row.product_name ?? row.name ?? `Product ${row.product_id ?? ''}`,
-        price,
-        notes: row.order_note ?? '',
-      });
-      return;
-    }
-
-    const status = String(row.status ?? 'Paid');
-    const date = row.created_at ?? row.order_date ?? 'Recorded';
-
-    grouped.set(orderId, {
-      id: orderId,
-      date,
-      time: row.order_time ?? '',
-      dateGroup: row.date_group ?? 'All Time',
-      subtotal: quantity * price,
-      discount,
-      total: quantity * price - discount,
-      method: row.payment_method ?? '-',
-      status,
-      cashReceived: Number(row.cash_received) || 0,
-      changeDue: Number(row.change_due) || 0,
-      cashier: row.cashier ?? '-',
-      table: row.table_number ?? row.table ?? 'Takeaway',
-      items: [{
-        qty: quantity,
-        name: row.product_name ?? row.name ?? `Product ${row.product_id ?? ''}`,
-        price,
-        notes: row.order_note ?? '',
-      }],
-    });
-  });
-
-  return Array.from(grouped.values()).reverse();
+type Period = 'daily' | 'monthly' | 'annual';
+type Transaction = {
+  transaction_id: string;
+  created_at: string;
+  status: string;
+  payment_method: string;
+  subtotal: number;
+  discount_total: number;
+  total: number;
+  transaction_items: { product_name: string; quantity: number; price: number; order_note: string }[];
 };
 
+function periodBounds(period: Period) {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), period === 'annual' ? 0 : period === 'monthly' ? now.getMonth() : now.getMonth(), period === 'daily' ? now.getDate() : 1);
+  const end = period === 'annual'
+    ? new Date(now.getFullYear() + 1, 0, 1)
+    : period === 'monthly'
+      ? new Date(now.getFullYear(), now.getMonth() + 1, 1)
+      : new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  return { from: start.toISOString(), to: end.toISOString() };
+}
+
+function csvCell(value: string | number) {
+  return `"${String(value).replaceAll('"', '""')}"`;
+}
+
 export default function HistoryInterface() {
-  // ---------------- STATE ----------------
-  const [searchQuery, setSearchQuery] = useState('');
-  const [dateFilter, setDateFilter] = useState('All Time'); // Today, This Month, All Time
-  const [paymentFilter, setPaymentFilter] = useState('All'); // All, QRIS, Cash, Other, Open Bill
-  const [statusFilter, setStatusFilter] = useState('All'); // All, Paid, Pending, Voided
-  
-  const [selectedOrder, setSelectedOrder] = useState<any>(null); // Controls the Receipt Modal
+  const [period, setPeriod] = useState<Period>('daily');
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [selected, setSelected] = useState<Transaction | null>(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [closingId, setClosingId] = useState<string | null>(null);
 
-  const [logs, setLogs] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState('');
-
-  useEffect(() => {
-    async function loadHistory() {
-      try {
-        const response = await fetch('/api/history', { cache: 'no-store' });
-        const data = await response.json();
-
-        if (!response.ok || data.success === false) {
-          throw new Error(data.message || 'Failed to load history.');
-        }
-
-        const rows = Array.isArray(data) ? data : data.history || data.data || [];
-        setLogs(groupHistoryRows(rows));
-      } catch (error) {
-        setLoadError(error instanceof Error ? error.message : 'Failed to load history.');
-      } finally {
-        setIsLoading(false);
-      }
-    }
-
-    loadHistory();
-  }, []);
-
-  // ---------------- ACTIONS ----------------
-  const markAsPaid = async (orderId: string, method: string) => {
+  async function load(periodToLoad = period) {
+    setLoading(true);
+    setError('');
     try {
-      const payload = new URLSearchParams({
-        action: 'updateOrderStatus',
-        order_id: orderId,
-        payment_method: method,
-        status: 'Paid',
-      });
-      const response = await fetch('/api/history', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-        body: payload.toString(),
-      });
-      const result = await response.json();
-
-      if (!response.ok || result.success === false) {
-        throw new Error(result.message || 'Failed to update order status.');
-      }
-
-      setLogs(currentLogs => currentLogs.map(log => log.id === orderId
-        ? { ...log, status: 'Paid', method, cashier: 'Trisha' }
-        : log
-      ));
-      setSelectedOrder(null);
-    } catch (error) {
-      alert(error instanceof Error ? error.message : 'Failed to update order status.');
+      setTransactions(await listTransactions({ limit: 1000, ...periodBounds(periodToLoad) }) as Transaction[]);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : 'Failed to load transactions.');
+    } finally {
+      setLoading(false);
     }
-  };
+  }
 
-  // ---------------- FILTER LOGIC ----------------
-  const filteredLogs = logs.filter(log => {
-    const matchesSearch = log.id.toLowerCase().includes(searchQuery.toLowerCase()) || log.table.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesDate = dateFilter === 'All Time' || log.dateGroup === dateFilter;
-    const matchesPayment = paymentFilter === 'All' || log.method === paymentFilter;
-    const matchesStatus = statusFilter === 'All' || log.status === statusFilter;
-    
-    return matchesSearch && matchesDate && matchesPayment && matchesStatus;
-  });
+  // Loading is intentionally started after the page mounts.
+  // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps
+  useEffect(() => { void load(); }, []);
 
-  // Gross sales only counts PAID orders
-  const totalRevenue = filteredLogs.filter(l => l.status === 'Paid').reduce((sum, l) => sum + l.total, 0);
-  const totalTransactions = filteredLogs.length;
+  const total = useMemo(() => transactions.reduce((sum, item) => sum + Number(item.total), 0), [transactions]);
+  const openBills = useMemo(() => transactions.filter(item =>
+    item.payment_method.toLowerCase() === 'open_bill' && item.status.toLowerCase() === 'pending').length, [transactions]);
+
+  async function closeBill(transaction: Transaction) {
+    setClosingId(transaction.transaction_id);
+    setError('');
+    try {
+      const updated = await closeOpenBill(transaction.transaction_id);
+      setTransactions(current => current.map(item => item.transaction_id === updated.transaction_id
+        ? { ...item, status: updated.status }
+        : item));
+      setSelected(current => {
+        if (!current || current.transaction_id !== updated.transaction_id) return current;
+        return { ...current, status: String(updated.status) };
+      });
+    } catch (closeError) {
+      setError(closeError instanceof Error ? closeError.message : 'Failed to close open bill.');
+    } finally {
+      setClosingId(null);
+    }
+  }
+
+  function exportCsv() {
+    const rows = [
+      ['Transaction ID', 'Date', 'Payment', 'Status', 'Subtotal', 'Discount', 'Total', 'Items'],
+      ...transactions.map(item => [
+        item.transaction_id,
+        new Date(item.created_at).toLocaleString('id-ID'),
+        item.payment_method.toUpperCase(),
+        item.status,
+        item.subtotal,
+        item.discount_total,
+        item.total,
+        item.transaction_items.map(line => `${line.quantity}x ${line.product_name}`).join('; '),
+      ]),
+    ];
+    const csv = `\uFEFF${rows.map(row => row.map(csvCell).join(',')).join('\r\n')}`;
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `transactions-${period}-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6 text-slate-800 relative">
-      
-      {/* ---------------- RECEIPT MODAL ---------------- */}
-      {selectedOrder && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden flex flex-col">
-            
-            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <div className="flex items-center gap-2 text-slate-800">
-                <Receipt size={20} className="text-slate-500"/>
-                <h2 className="text-lg font-bold">Order #{selectedOrder.id} ({selectedOrder.table})</h2>
-              </div>
-              <button onClick={() => setSelectedOrder(null)} className="p-2 bg-slate-200 hover:bg-slate-300 rounded-full transition-colors">
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="p-6 overflow-y-auto bg-white">
-              <div className="text-center mb-6">
-                <h3 className="font-black text-xl tracking-tight text-slate-800">TRISHA SLOWBAR</h3>
-                <p className="text-xs text-slate-500 mt-1">{selectedOrder.date} • {selectedOrder.time}</p>
-                <p className="text-xs text-slate-500">Ordered via QR ({selectedOrder.table})</p>
-              </div>
-
-              <div className="border-t border-b border-dashed border-slate-300 py-4 mb-4 flex flex-col gap-3">
-                {selectedOrder.items.map((item: any, idx: number) => (
-                  <div key={idx} className="flex justify-between items-start text-sm">
-                    <div className="flex-1 pr-4">
-                      <span className="font-bold text-slate-800">{item.qty}x {item.name}</span>
-                      {item.notes && <p className="text-xs text-slate-500 mt-0.5">{item.notes}</p>}
-                    </div>
-                    <span className="font-medium text-slate-800">Rp {item.price.toLocaleString('id-ID')}</span>
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex flex-col gap-1 text-sm mb-6">
-                <div className="flex justify-between text-slate-600">
-                  <span>Subtotal</span>
-                  <span>Rp {selectedOrder.subtotal.toLocaleString('id-ID')}</span>
-                </div>
-                {selectedOrder.discount > 0 && (
-                  <div className="flex justify-between text-emerald-600">
-                    <span>Discount</span>
-                    <span>- Rp {selectedOrder.discount.toLocaleString('id-ID')}</span>
-                  </div>
-                )}
-                <div className="flex justify-between font-black text-lg text-slate-800 mt-2 pt-2 border-t border-slate-100">
-                  <span>Total Due</span>
-                  <span>Rp {selectedOrder.total.toLocaleString('id-ID')}</span>
-                </div>
-                {selectedOrder.method === 'Cash' && (
-                  <>
-                    <div className="flex justify-between text-slate-600 mt-2">
-                      <span>Cash Received</span>
-                      <span>Rp {selectedOrder.cashReceived.toLocaleString('id-ID')}</span>
-                    </div>
-                    <div className="flex justify-between font-bold text-emerald-600">
-                      <span>Change</span>
-                      <span>Rp {selectedOrder.changeDue.toLocaleString('id-ID')}</span>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Status & Quick Action */}
-              {selectedOrder.status === 'Pending' ? (
-                <div className="flex flex-col gap-2">
-                  {selectedOrder.method === 'Open Bill' && <div className="p-3 rounded-lg text-center font-bold text-sm bg-amber-50 text-amber-700 border border-amber-100">OPEN BILL</div>}
-                  <p className="text-xs font-bold text-amber-600 text-center uppercase tracking-wide">Customer is waiting to pay</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button onClick={() => markAsPaid(selectedOrder.id, 'Cash')} className="bg-emerald-600 text-white font-bold py-2.5 rounded-lg text-sm hover:bg-emerald-700">
-                      Paid (Cash)
-                    </button>
-                    <button onClick={() => markAsPaid(selectedOrder.id, 'QRIS')} className="bg-blue-600 text-white font-bold py-2.5 rounded-lg text-sm hover:bg-blue-700">
-                      Paid (QRIS)
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className={`p-3 rounded-lg flex items-center justify-center gap-2 font-bold text-sm ${
-                  selectedOrder.status === 'Paid' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-red-50 text-red-700 border border-red-100'
-                }`}>
-                  {selectedOrder.status === 'Paid' ? `PAID VIA ${selectedOrder.method}` : 'ORDER VOIDED'}
-                </div>
-              )}
-            </div>
-          </div>
+    <div className="min-h-screen bg-slate-50 p-4 text-slate-800 sm:p-6">
+      <header className="mx-auto mb-6 flex max-w-7xl flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <Link href="/" className="border border-slate-200 bg-white p-2.5 shadow-sm transition hover:bg-slate-100"><ArrowLeft size={20} /></Link>
+          <div><p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Reports</p><h1 className="text-xl font-bold">Transaction Logs</h1></div>
         </div>
-      )}
-
-      {/* ---------------- MAIN LAYOUT ---------------- */}
-      <header className="flex justify-between items-center mb-6">
-        <div className="flex items-center gap-4">
-          <Link href="/" className="p-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors">
-            <ArrowLeft size={20} />
-          </Link>
-          <h1 className="text-2xl font-bold">Sales Overview & Pending Orders</h1>
-        </div>
-        <div className="flex items-center gap-2 bg-white border border-slate-200 px-4 py-2 rounded-lg text-sm font-medium">
-          <Calendar size={16} className="text-slate-400" />
-          History from Google Sheets
+        <div className="flex flex-wrap gap-2">
+          <select value={period} onChange={event => { const next = event.target.value as Period; setPeriod(next); void load(next); }} className="border border-slate-200 bg-white px-3 py-2 text-sm font-medium outline-none shadow-sm focus:border-blue-500">
+            <option value="daily">Today</option><option value="monthly">This month</option><option value="annual">This year</option>
+          </select>
+          <button onClick={exportCsv} disabled={!transactions.length} className="inline-flex items-center gap-2 border border-slate-800 bg-slate-800 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700 disabled:opacity-40"><Download size={16} /> CSV</button>
+          <button onClick={() => window.print()} className="inline-flex items-center gap-2 border border-slate-200 bg-white px-3 py-2 text-sm font-semibold shadow-sm transition hover:bg-slate-100"><Printer size={16} /> Print</button>
         </div>
       </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-          <p className="text-sm font-semibold text-slate-500 mb-2 uppercase tracking-wide flex items-center gap-2">
-            Gross Sales <span className="text-xs font-normal text-slate-400 normal-case">({dateFilter})</span>
-          </p>
-          <h2 className="text-3xl font-bold text-slate-800 flex items-center gap-2">
-            Rp {totalRevenue.toLocaleString('id-ID')} <TrendingUp size={24} className="text-emerald-500" />
-          </h2>
-        </div>
-        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-          <p className="text-sm font-semibold text-slate-500 mb-2 uppercase tracking-wide">Total Transactions</p>
-          <h2 className="text-3xl font-bold text-slate-800">{totalTransactions} Orders</h2>
-        </div>
-        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-center">
-          <button className="w-full bg-blue-50 text-blue-700 font-semibold py-3 rounded-lg border border-blue-100 hover:bg-blue-100 transition-colors flex justify-center items-center gap-2">
-            <FileText size={18} /> Export CSV Report
-          </button>
-        </div>
-      </div>
+      <main className="mx-auto max-w-7xl">
+        {error && <p className="mb-4 border border-red-200 bg-red-50 p-3 text-sm text-red-700 shadow-sm">{error}</p>}
+        <section className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <div className="border border-slate-200 bg-white p-4 shadow-sm"><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Transactions</p><p className="mt-1 text-2xl font-bold">{transactions.length}</p></div>
+          <div className="border border-slate-200 bg-white p-4 shadow-sm"><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Revenue</p><p className="mt-1 text-lg font-bold sm:text-2xl">Rp {total.toLocaleString('id-ID')}</p></div>
+          <div className="col-span-2 border border-slate-200 bg-white p-4 shadow-sm sm:col-span-1"><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Open Bills</p><p className="mt-1 text-2xl font-bold">{openBills}</p></div>
+        </section>
 
-      {/* ---------------- FILTERS & SEARCH BAR ---------------- */}
-      <div className="bg-white p-4 rounded-t-xl border-x border-t border-slate-200 flex flex-col md:flex-row gap-4 justify-between items-center shadow-sm">
-        
-        <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg w-full md:w-64">
-          <Search size={18} className="text-slate-400" />
-          <input 
-            type="text" 
-            placeholder="Search ID or Table..." 
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="bg-transparent border-none outline-none text-sm w-full"
-          />
-        </div>
-
-        <div className="flex gap-3 w-full md:w-auto overflow-x-auto pb-1 md:pb-0">
-          
-          <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 shrink-0">
-            <Calendar size={16} className="text-slate-500"/>
-            <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} className="bg-transparent text-sm font-medium outline-none cursor-pointer">
-              <option value="Today">Today</option>
-              <option value="This Month">This Month</option>
-              <option value="All Time">All Time</option>
-            </select>
+        <section className="print-sales-activity overflow-hidden border border-slate-200 bg-white shadow-sm">
+          <div className="flex items-center justify-between border-b px-4 py-4 sm:px-5"><div><h2 className="font-bold">Sales activity</h2><p className="text-xs text-slate-400">Showing {period} records</p></div>{loading && <span className="text-sm text-slate-400">Loading...</span>}</div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[700px] text-left text-sm">
+              <thead><tr className="border-b bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><th className="px-5 py-3">Date</th><th className="px-5 py-3">Payment</th><th className="px-5 py-3">Status</th><th className="px-5 py-3 text-right">Total</th><th className="px-5 py-3 text-right">Details</th></tr></thead>
+              <tbody>
+                {!loading && !transactions.length && <tr><td colSpan={5} className="px-5 py-12 text-center text-slate-400">No transactions in this period.</td></tr>}
+                {transactions.map(transaction => {
+                  const isOpenBill = transaction.payment_method.toLowerCase() === 'open_bill';
+                  const isPending = transaction.status.toLowerCase() === 'pending';
+                  return <tr key={transaction.transaction_id} className="border-b last:border-0 hover:bg-slate-50">
+                    <td className="whitespace-nowrap px-5 py-4">{new Date(transaction.created_at).toLocaleString('id-ID')}</td>
+                    <td className="px-5 py-4 font-medium">{transaction.payment_method.replaceAll('_', ' ').toUpperCase()}</td>
+                    <td className="px-5 py-4"><span className={`border px-2.5 py-1 text-xs font-semibold ${isPending ? 'border-amber-200 bg-amber-100 text-amber-700' : 'border-emerald-200 bg-emerald-100 text-emerald-700'}`}>{transaction.status}</span></td>
+                    <td className="px-5 py-4 text-right font-bold">Rp {Number(transaction.total).toLocaleString('id-ID')}</td>
+                    <td className="px-5 py-4 text-right"><div className="flex justify-end gap-2">
+                      {isOpenBill && isPending && <button onClick={() => void closeBill(transaction)} disabled={closingId === transaction.transaction_id} className="inline-flex items-center gap-1 border border-emerald-600 bg-emerald-600 px-2.5 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"><Check size={14} />{closingId === transaction.transaction_id ? 'Closing' : 'Close'}</button>}
+                      <button aria-label="View transaction details" onClick={() => setSelected(transaction)} className="border border-blue-100 p-2 text-blue-600 shadow-sm hover:bg-blue-50"><Receipt size={18} /></button>
+                    </div></td>
+                  </tr>;
+                })}
+              </tbody>
+            </table>
           </div>
+        </section>
+      </main>
 
-          <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 shrink-0">
-            <CreditCard size={16} className="text-slate-500"/>
-            <select value={paymentFilter} onChange={(e) => setPaymentFilter(e.target.value)} className="bg-transparent text-sm font-medium outline-none cursor-pointer">
-              <option value="All">All Payments</option>
-              <option value="QRIS">QRIS</option>
-              <option value="Cash">Cash</option>
-              <option value="Other">Other</option>
-              <option value="Open Bill">Open Bill</option>
-            </select>
-          </div>
-
-          <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 shrink-0">
-            <Filter size={16} className="text-slate-500"/>
-            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="bg-transparent text-sm font-medium outline-none cursor-pointer">
-              <option value="All">All Status</option>
-              <option value="Paid">Paid Only</option>
-              <option value="Pending">Pending Only</option>
-              <option value="Voided">Voided Only</option>
-            </select>
-          </div>
-
+      {selected && <div className="fixed inset-0 z-10 flex items-center justify-center bg-slate-900/50 p-4" onClick={() => setSelected(null)}>
+        <div className="w-full max-w-md border border-slate-200 bg-white p-5 shadow-xl" onClick={event => event.stopPropagation()}>
+          <div className="mb-5 flex items-start justify-between"><div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Transaction</p><h2 className="font-bold">#{selected.transaction_id.slice(0, 8)}</h2></div><button onClick={() => setSelected(null)} className="border border-slate-200 p-1 text-slate-400 shadow-sm hover:bg-slate-100"><X size={20} /></button></div>
+          <div className="space-y-3 border-b pb-4">{selected.transaction_items.map((item, index) => <div key={`${item.product_name}-${item.order_note}-${index}`} className="flex justify-between gap-4 text-sm"><span>{item.quantity}x {item.product_name}</span><span className="whitespace-nowrap">Rp {Number(item.price * item.quantity).toLocaleString('id-ID')}</span></div>)}</div>
+          <div className="mt-4 flex justify-between text-lg font-bold"><span>Total</span><span>Rp {Number(selected.total).toLocaleString('id-ID')}</span></div>
+          {selected.payment_method.toLowerCase() === 'open_bill' && selected.status.toLowerCase() === 'pending' && <button disabled={closingId === selected.transaction_id} onClick={() => void closeBill(selected)} className="mt-5 w-full border border-emerald-600 bg-emerald-600 p-3 font-bold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50">{closingId === selected.transaction_id ? 'Closing...' : 'Close Open Bill'}</button>}
         </div>
-      </div>
-
-      {/* ---------------- TRANSACTION TABLE ---------------- */}
-      <div className="bg-white rounded-b-xl shadow-sm border border-slate-200 overflow-hidden">
-        <table className="w-full text-left border-collapse">
-          <thead>
-            <tr className="border-b border-slate-200 text-xs uppercase tracking-wider text-slate-500 bg-slate-50">
-              <th className="p-4 font-semibold">Order ID</th>
-              <th className="p-4 font-semibold">Table / Source</th>
-              <th className="p-4 font-semibold">Date & Time</th>
-              <th className="p-4 font-semibold">Payment</th>
-              <th className="p-4 font-semibold">Status</th>
-              <th className="p-4 font-semibold text-right">Total</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 text-sm">
-            {isLoading ? (
-              <tr>
-                <td colSpan={6} className="p-8 text-center text-slate-500">Loading history...</td>
-              </tr>
-            ) : loadError ? (
-              <tr>
-                <td colSpan={6} className="p-8 text-center text-red-600">{loadError}</td>
-              </tr>
-            ) : filteredLogs.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="p-8 text-center text-slate-500">No transactions found matching your filters.</td>
-              </tr>
-            ) : (
-              filteredLogs.map((log) => (
-                <tr 
-                  key={log.id} 
-                  onClick={() => setSelectedOrder(log)}
-                  className="hover:bg-slate-50 transition-colors cursor-pointer group"
-                >
-                  <td className="p-4 font-bold text-blue-600 group-hover:text-blue-700">#{log.id}</td>
-                  <td className="p-4 font-semibold text-slate-700">{log.table}</td>
-                  <td className="p-4 text-slate-600">
-                    <span className="font-medium text-slate-800 block">{log.date}</span>
-                    <span className="text-xs">{log.time}</span>
-                  </td>
-                  <td className="p-4 text-slate-600 font-medium">
-                    {log.method !== '-' && <span className="bg-slate-100 px-2 py-1 rounded text-xs">{log.method}</span>}
-                  </td>
-                  <td className="p-4">
-                    <span className={`px-2.5 py-1 rounded-md text-xs font-bold ${
-                      log.status === 'Paid' ? 'bg-emerald-100 text-emerald-700' :
-                      log.status === 'Pending' ? 'bg-amber-100 text-amber-700 animate-pulse' :
-                      'bg-red-100 text-red-700'
-                    }`}>
-                      {log.status}
-                    </span>
-                  </td>
-                  <td className="p-4 text-right font-black text-slate-800">
-                    Rp {log.total.toLocaleString('id-ID')}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
+      </div>}
     </div>
   );
 }

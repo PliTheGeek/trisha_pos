@@ -68,7 +68,7 @@ export default function CustomerMenu() {
       alert("Please enter your name so we can call your order!");
       return;
     }
-    // In a real app, this sends data to Next.js API -> Google Sheets
+    // This public ordering screen is separate from the authenticated cashier checkout.
     setOrderPlaced(true);
     setIsCartOpen(false);
   };

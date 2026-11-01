@@ -1,460 +1,163 @@
-'use client'; 
+'use client';
 
 import { useEffect, useState } from 'react';
 import { ArrowLeft, Edit, Plus, Tags, Trash2, Percent } from 'lucide-react';
 import Link from 'next/link';
+import {
+  createMenu, deleteMenu, listMenu, updateMenu,
+} from '@/app/actions/menu';
+import {
+  createDiscount, deleteDiscount, listDiscounts, updateDiscount,
+} from '@/app/actions/discounts';
+
+type Menu = {
+  product_id: string; product_name: string; category: string; price: number; cogs: number; description: string;
+};
+type Discount = {
+  discount_id: string; discount_name: string; discount_type: 'percentage' | 'flat'; discount_value: number;
+  minimum_subtotal: number; is_active: boolean;
+};
+
+const emptyMenu = { name: '', category: 'Coffee', price: '', cogs: '', description: '' };
+type DiscountForm = { name: string; type: 'percentage' | 'flat'; value: string; minimum_subtotal: string };
+const emptyDiscount: DiscountForm = { name: '', type: 'percentage', value: '', minimum_subtotal: '' };
 
 export default function ManageInterface() {
-  const [activeTab, setActiveTab] = useState('menu'); 
-  const [editingId, setEditingId] = useState<string | null>(null); 
-  const [menuItems, setMenuItems] = useState<any[]>([]);
-  const [isLoadingMenu, setIsLoadingMenu] = useState(true);
+  const [tab, setTab] = useState<'menu' | 'discount'>('menu');
+  const [menus, setMenus] = useState<Menu[]>([]);
+  const [discounts, setDiscounts] = useState<Discount[]>([]);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [menuForm, setMenuForm] = useState(emptyMenu);
+  const [discountForm, setDiscountForm] = useState(emptyDiscount);
+  const [message, setMessage] = useState('');
+  const [saving, setSaving] = useState(false);
 
-
-  type MenuForm = {
-    name: string;
-    category: string;
-    price: string;
-    cogs: string;
-    description: string;
-  };
-
-  const emptyForm: MenuForm = {
-    name: '',
-    category: 'Coffee',
-    price: '',
-    cogs: '',
-    description: '',
-  };
-
-  const [menuForm, setMenuForm] = useState<MenuForm>(emptyForm);
-  const [isSaving, setIsSaving] = useState(false);
-  const [saveMessage, setSaveMessage] = useState('');
-
-  useEffect(() => {
-    async function getMenuItems() {
-      try {
-        const sheetUrl = process.env.NEXT_PUBLIC_GOOGLE_SHEETS_URL;
-
-        if (!sheetUrl) {
-          throw new Error('NEXT_PUBLIC_GOOGLE_SHEETS_URL is not configured');
-        }
-
-        const response = await fetch(`${sheetUrl}?action=menu`, {
-          method: 'GET',
-          cache: 'no-store',
-        });
-
-        if (!response.ok) {
-          throw new Error(`Menu request failed with status ${response.status}`);
-        }
-
-        const data = await response.json();
-        const rows = Array.isArray(data) ? data : data.menu || data.data || [];
-
-      setMenuItems(rows.map((item: any) => ({
-        ...item,
-        id: String(item.id ?? item.product_id),
-        name: item.name ?? item.product_name ?? item.product_id,
-        price: Number(item.price) || 0,
-        cogs: Number(item.cogs) || 0,
-        description: item.description ?? '',
-      })));
-      } catch (error) {
-        console.error('Failed to load menu:', error);
-        setMenuItems([]);
-      } finally {
-        setIsLoadingMenu(false);
-      }
+  async function load() {
+    try {
+      const [menuRows, discountRows] = await Promise.all([listMenu(), listDiscounts()]);
+      setMenus(menuRows as Menu[]);
+      setDiscounts(discountRows as Discount[]);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to load data.');
     }
-
-    getMenuItems();
-  }, []);
-
-  const discountItems = [
-    { id: 'D001', name: 'Opening Promo', type: 'percentage', value: 10, status: 'Active' },
-    { id: 'D002', name: 'Bring Your Own Cup', type: 'flat', value: 5000, status: 'Active' },
-  ];
-
-  const currentEditMenu = menuItems.find(item => item.id === editingId);
-  const currentEditDisc = discountItems.find(item => item.id === editingId);
-
-
-  const handleDeleteMenu = async (item: any) => {
-  const confirmed = window.confirm(
-    `Delete "${item.name}"? This action cannot be undone.`
-  );
-
-  if (!confirmed) {
-    return;
   }
 
-  const sheetUrl = process.env.NEXT_PUBLIC_GOOGLE_SHEETS_URL;
+  // Data loading is intentionally started after mount.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { void load(); }, []);
 
-  if (!sheetUrl) {
-    return;
-  }
-
-  try {
-    const payload = new URLSearchParams({
-      action: 'deleteMenu',
-      id: String(item.id),
-    });
-
-    const response = await fetch(sheetUrl, {
-      method: 'POST',
-      body: payload,
-    });
-
-    const result = await response.json();
-
-    if (!response.ok || result.success === false) {
-      throw new Error(result.message || 'Failed to delete product.');
-    }
-
-    setMenuItems((currentItems) =>
-      currentItems.filter(
-        (currentItem) => String(currentItem.id) !== String(item.id)
-      )
-    );
-
-    if (String(editingId) === String(item.id)) {
-      handleAddNewMenu();
-    }
-  } catch (error) {
-    setSaveMessage(
-      error instanceof Error
-        ? error.message
-        : 'Failed to delete product.'
-    );
-  }
-};
-
-  // ---------------- FORM BUILDER ACTIONS ----------------
-
-  // When clicking Edit on a Menu Item
-  const handleEditMenu = (item: any) => {
-    setEditingId(item.id);
-    setMenuForm({
-      name: item.name,
-      category: item.category,
-      price: String(item.price),
-      cogs: String(item.cogs),
-      description: item.description,
-    });
-
-    setSaveMessage('');
-  };
-
-  const handleAddNewMenu = () => {
+  function reset() {
     setEditingId(null);
-    setMenuForm(emptyForm);
-    setSaveMessage('');
-  };
-
-const handleSaveMenu = async () => {
-  const sheetUrl = process.env.NEXT_PUBLIC_GOOGLE_SHEETS_URL;
-
-  if (!sheetUrl) {
-    setSaveMessage('Google Sheets URL belum dikonfigurasi.');
-    return;
+    setMenuForm(emptyMenu);
+    setDiscountForm(emptyDiscount);
+    setMessage('');
   }
 
-  if (!menuForm.name.trim()) {
-    setSaveMessage('Nama produk wajib diisi.');
-    return;
-  }
-
-  setIsSaving(true);
-  setSaveMessage('');
-
-  try {
-    const payload = new URLSearchParams({
-      action: editingId ? 'updateMenu' : 'createMenu',
-      id: editingId ?? '',
-      name: menuForm.name.trim(),
-      category: menuForm.category,
-      price: menuForm.price || '0',
-      cogs: menuForm.cogs || '0',
-      description: menuForm.description.trim(),
-    });
-
-    const response = await fetch(sheetUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-      },
-      body: payload.toString(),
-    });
-
-    const result = await response.json();
-
-    if (!response.ok || result.success === false) {
-      throw new Error(result.message || 'Gagal menyimpan produk.');
+  async function save() {
+    setSaving(true);
+    setMessage('');
+    try {
+      if (tab === 'menu') {
+        if (!menuForm.name.trim()) throw new Error('Menu name is required.');
+        const input = {
+          product_id: editingId ?? `P-${Date.now()}`, product_name: menuForm.name.trim(),
+          category: menuForm.category, price: Number(menuForm.price),
+          cogs: Number(menuForm.cogs) || 0, description: menuForm.description.trim(),
+        };
+        if (editingId) await updateMenu(editingId, input);
+        else await createMenu(input);
+      } else {
+        if (!discountForm.name.trim() || Number(discountForm.value) <= 0) {
+          throw new Error('Discount name and positive value are required.');
+        }
+        const input = {
+          discount_id: editingId ?? `D-${Date.now()}`, discount_name: discountForm.name.trim(),
+          discount_type: discountForm.type, discount_value: Number(discountForm.value),
+          minimum_subtotal: Number(discountForm.minimum_subtotal) || 0,
+          is_active: true,
+        };
+        if (editingId) await updateDiscount(editingId, input);
+        else await createDiscount(input);
+      }
+      await load();
+      reset();
+      setMessage('Saved successfully.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Save failed.');
+    } finally {
+      setSaving(false);
     }
-
-    const savedItem = {
-      id: editingId ?? result.id,
-      name: menuForm.name.trim(),
-      category: menuForm.category,
-      price: Number(menuForm.price) || 0,
-      cogs: Number(menuForm.cogs) || 0,
-      description: menuForm.description.trim(),
-    };
-
-    setMenuItems((currentItems) =>
-      editingId
-        ? currentItems.map((item) =>
-            String(item.id) === String(editingId) ? savedItem : item
-          )
-        : [...currentItems, savedItem]
-    );
-
-    setSaveMessage('Produk berhasil disimpan.');
-
-    if (!editingId) {
-      setMenuForm(emptyForm);
-    }
-  } catch (error) {
-    setSaveMessage(
-      error instanceof Error ? error.message : 'Gagal menyimpan produk.'
-    );
-  } finally {
-    setIsSaving(false);
   }
-};
 
+  function editMenu(item: Menu) {
+    setTab('menu'); setEditingId(item.product_id);
+    setMenuForm({ name: item.product_name, category: item.category, price: String(item.price), cogs: String(item.cogs), description: item.description });
+  }
 
+  function editDiscount(item: Discount) {
+    setTab('discount'); setEditingId(item.discount_id);
+    setDiscountForm({ name: item.discount_name, type: item.discount_type, value: String(item.discount_value), minimum_subtotal: String(item.minimum_subtotal) });
+  }
+
+  async function remove(id: string, type: 'menu' | 'discount') {
+    if (!window.confirm('Delete this record?')) return;
+    try {
+      if (type === 'menu') await deleteMenu(id);
+      else await deleteDiscount(id);
+      await load();
+      reset();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Delete failed.');
+    }
+  }
 
   return (
-    <div className="flex flex-col md:flex-row h-screen bg-slate-50 text-slate-800">
-      
-      {/* ---------------- LEFT SECTION: Data Table ---------------- */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden">
-        
-        <header className="bg-white p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4 z-10">
+    <div className="min-h-screen bg-slate-50 text-slate-800">
+      <main className="mx-auto max-w-7xl p-4 sm:p-6">
+        <header className="mb-6 flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-4">
-            <Link href="/" className="p-2 bg-slate-100 rounded-lg hover:bg-slate-200 text-slate-600 transition-colors">
-              <ArrowLeft size={20} />
-            </Link>
-            <h1 className="text-xl font-bold tracking-tight">Data Management</h1>
+            <Link href="/" className="border border-slate-200 bg-white p-2 shadow-sm"><ArrowLeft size={20} /></Link>
+            <div><p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Catalog</p><h1 className="text-xl font-bold">Data Management</h1></div>
           </div>
-          
-          <div className="flex bg-slate-100 p-1 rounded-lg">
-            <button onClick={() => { setActiveTab('menu'); handleAddNewMenu(); }}
-              className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-all ${activeTab === 'menu' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>
-              <Tags size={16} /> Menu Items
-            </button>
-            <button onClick={() => { setActiveTab('discount'); handleAddNewMenu(); }}
-              className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-all ${activeTab === 'discount' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>
-              <Percent size={16} /> Discounts
-            </button>
+          <div className="flex w-full gap-1 border border-slate-200 bg-white p-1 shadow-sm sm:w-auto">
+            <button onClick={() => { setTab('menu'); reset(); }} className={`flex-1 px-3 py-2 text-sm font-semibold sm:flex-none ${tab === 'menu' ? 'bg-slate-800 text-white' : 'text-slate-500 hover:bg-slate-100'}`}><Tags size={15} className="mr-1 inline" />Menu</button>
+            <button onClick={() => { setTab('discount'); reset(); }} className={`flex-1 px-3 py-2 text-sm font-semibold sm:flex-none ${tab === 'discount' ? 'bg-slate-800 text-white' : 'text-slate-500 hover:bg-slate-100'}`}><Percent size={15} className="mr-1 inline" />Discounts</button>
           </div>
         </header>
-
-        <div className="flex-1 overflow-y-auto p-6">
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-            
-            {activeTab === 'menu' ? (
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-sm text-slate-500">
-                    <th className="p-4 font-medium">Item Name</th>
-                    <th className="p-4 font-medium">Category</th>
-                    <th className="p-4 font-medium">Selling Price</th>
-                    <th className="p-4 font-medium text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {isLoadingMenu ? (
-                    <tr>
-                      <td colSpan={4} className="p-6 text-center text-sm text-slate-400">Loading menu...</td>
-                    </tr>
-                  ) : menuItems.length === 0 ? (
-                    <tr>
-                      <td colSpan={4} className="p-6 text-center text-sm text-slate-400">No menu items found.</td>
-                    </tr>
-                  ) : menuItems.map((item) => (
-                    <tr key={item.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="p-4 font-medium text-slate-800">
-                        {item.name}
-                      </td>
-                      <td className="p-4"><span className="px-2 py-1 bg-slate-100 text-slate-600 text-xs rounded-md">{item.category}</span></td>
-                      <td className="p-4 font-medium text-blue-600">Rp {item.price.toLocaleString('id-ID')}</td>
-                      <td className="p-4 text-right">
-                        {/* Edit Button triggers the state load */}
-                        <button onClick={() => handleEditMenu(item)} className="p-2 text-slate-400 hover:text-blue-600"><Edit size={16} /></button>
-                        <button
-                          onClick={() => handleDeleteMenu(item)}
-                          className="p-2 text-slate-400 hover:text-red-600"
-                          title="Delete product">
-                          <Trash2 size={16} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <table className="w-full text-left border-collapse">
-                 {/* Discount Table */}
-                 <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-sm text-slate-500">
-                    <th className="p-4 font-medium">Discount Name</th>
-                    <th className="p-4 font-medium">Type</th>
-                    <th className="p-4 font-medium">Amount</th>
-                    <th className="p-4 font-medium text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {discountItems.map((discount) => (
-                    <tr key={discount.id} className="hover:bg-slate-50">
-                      <td className="p-4 font-medium">{discount.name}</td>
-                      <td className="p-4 text-xs uppercase">{discount.type}</td>
-                      <td className="p-4 font-bold text-blue-600">{discount.value}</td>
-                      <td className="p-4 text-right">
-                        <button onClick={() => setEditingId(discount.id)} className="p-2 text-slate-400 hover:text-blue-600"><Edit size={16} /></button>
-                        <button className="p-2 text-slate-400 hover:text-red-600"><Trash2 size={16} /></button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* ---------------- RIGHT SECTION: Dynamic Editor Form ---------------- */}
-      <div className="w-full md:w-[450px] bg-white border-l border-slate-200 flex flex-col shadow-lg z-20">
-        
-        <div className="p-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
-          <span className="font-bold text-slate-800">
-            {activeTab === 'menu' 
-              ? (editingId ? `Edit: ${currentEditMenu?.name}` : 'Add New Menu Item') 
-              : (editingId ? `Edit: ${currentEditDisc?.name}` : 'Add New Discount')
-            }
-          </span>
-          <button onClick={handleAddNewMenu} className="bg-blue-100 text-blue-600 p-1.5 rounded hover:bg-blue-200 transition-colors" title="Create New">
-            <Plus size={18} />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-6">
-          {activeTab === 'menu' ? (
-            /* MENU FORM */
-            <form key={editingId || 'new'} className="flex flex-col gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 mb-1">Item Name</label>
-                <input
-                  type="text"
-                  value={menuForm.name}
-                  onChange={(e) =>
-                    setMenuForm({ ...menuForm, name: e.target.value })
-                  }
-                  placeholder="e.g. V60 Filter"
-                  className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 mb-1">Category</label>
-                <select
-                  value={menuForm.category}
-                  onChange={(e) =>
-                    setMenuForm({ ...menuForm, category: e.target.value })
-                  }
-                  className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-500 bg-white"
-                >
-                  <option>Coffee</option>
-                  <option>Snack</option>
-                  <option>Retail</option>
-                </select>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">Selling Price</label>
-                  <input
-                    type="number"
-                    value={menuForm.price}
-                    onChange={(e) =>
-                      setMenuForm({ ...menuForm, price: e.target.value })
-                    }
-                    placeholder="35000"
-                    className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">COGS</label>
-                  <input
-                    type="number"
-                    value={menuForm.cogs}
-                    onChange={(e) =>
-                      setMenuForm({ ...menuForm, cogs: e.target.value })
-                    }
-                    placeholder="12000"
-                    className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-500"
-                  />
-                </div>
-              </div>
-            <div className="pt-4 mt-2 border-t border-slate-100">
-              <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide mb-3">
-                Description
-              </label>
-                <textarea
-                  value={menuForm.description}
-                  onChange={(e) =>
-                    setMenuForm({ ...menuForm, description: e.target.value })
-                  }
-                  placeholder="Food or drink description"
-                  rows={4}
-                  className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-500 resize-none"
-                />
-            </div>
-            <button
-              type="button"
-              onClick={handleSaveMenu}
-              disabled={isSaving}
-              className="mt-4 w-full bg-slate-800 text-white font-bold py-4 rounded-xl hover:bg-slate-900 transition-colors shadow-md text-lg disabled:opacity-50"
-            >
-              {isSaving
-                ? 'Saving...'
-                : editingId
-                  ? 'Save Changes'
-                  : 'Save New Item'}
-            </button>
-
-          {saveMessage && (
-            <p className="text-sm text-center text-slate-500">
-              {saveMessage}
-            </p>
-          )}
-          </form>
+        {message && <p className="mb-4 border border-blue-100 bg-blue-50 p-3 text-sm text-blue-700 shadow-sm">{message}</p>}
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <section className="min-w-0 overflow-hidden border border-slate-200 bg-white shadow-sm">
+          <div className="border-b px-5 py-4"><h2 className="font-bold">{tab === 'menu' ? 'Menu items' : 'Discount rules'}</h2><p className="text-xs text-slate-400">Manage active catalog data</p></div>
+          <div className="overflow-x-auto">
+          {tab === 'menu' ? (
+            <table className="w-full min-w-[560px] text-left text-sm"><thead><tr className="border-b bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><th className="p-4">Name</th><th className="p-4">Category</th><th className="p-4">Price</th><th className="p-4 text-right">Actions</th></tr></thead>
+              <tbody>{menus.map(item => <tr key={item.product_id} className="border-b last:border-0 hover:bg-slate-50"><td className="p-4 font-semibold">{item.product_name}</td><td className="p-4 text-slate-500">{item.category}</td><td className="p-4">Rp {Number(item.price).toLocaleString('id-ID')}</td><td className="p-4 text-right"><button aria-label={`Edit ${item.product_name}`} onClick={() => editMenu(item)} className="mr-2 border border-blue-100 p-2 text-blue-600 shadow-sm hover:bg-blue-50"><Edit size={16} /></button><button aria-label={`Delete ${item.product_name}`} onClick={() => void remove(item.product_id, 'menu')} className="border border-red-100 p-2 text-red-600 shadow-sm hover:bg-red-50"><Trash2 size={16} /></button></td></tr>)}</tbody>
+            </table>
           ) : (
-            /* DISCOUNT FORM (Unchanged) */
-            <form key={editingId || 'newDisc'} className="flex flex-col gap-4">
-               {/* Same discount inputs as before... */}
-               <div>
-                <label className="block text-xs font-semibold text-slate-500 mb-1">Discount Name</label>
-                <input type="text" defaultValue={currentEditDisc?.name || ''} placeholder="e.g. Happy Hour" className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-500" />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 mb-1">Discount Type</label>
-                <select defaultValue={currentEditDisc?.type || 'percentage'} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-500 bg-white">
-                  <option value="percentage">Percentage (%)</option>
-                  <option value="flat">Flat Amount (Rp)</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 mb-1">Discount Value</label>
-                <input type="number" defaultValue={currentEditDisc?.value || ''} placeholder="15" className="w-full border border-slate-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-500" />
-              </div>
-              <button type="button" className="mt-4 w-full bg-blue-600 text-white font-bold py-4 rounded-xl hover:bg-blue-700 transition-colors shadow-md text-lg">
-                 {editingId ? 'Update Discount' : 'Save New Discount'}
-              </button>
-            </form>
+            <table className="w-full min-w-[560px] text-left text-sm"><thead><tr className="border-b bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><th className="p-4">Name</th><th className="p-4">Type</th><th className="p-4">Value</th><th className="p-4 text-right">Actions</th></tr></thead>
+              <tbody>{discounts.map(item => <tr key={item.discount_id} className="border-b last:border-0 hover:bg-slate-50"><td className="p-4 font-semibold">{item.discount_name}</td><td className="p-4 text-slate-500">{item.discount_type}</td><td className="p-4">{item.discount_type === 'flat' ? `Rp ${Number(item.discount_value).toLocaleString('id-ID')}` : `${item.discount_value}%`}</td><td className="p-4 text-right"><button aria-label={`Edit ${item.discount_name}`} onClick={() => editDiscount(item)} className="mr-2 border border-blue-100 p-2 text-blue-600 shadow-sm hover:bg-blue-50"><Edit size={16} /></button><button aria-label={`Delete ${item.discount_name}`} onClick={() => void remove(item.discount_id, 'discount')} className="border border-red-100 p-2 text-red-600 shadow-sm hover:bg-red-50"><Trash2 size={16} /></button></td></tr>)}</tbody>
+            </table>
           )}
+          </div>
+        </section>
+        <aside className="border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-5 flex items-center justify-between"><div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{editingId ? 'Update existing' : 'Create new'}</p><h2 className="font-bold">{editingId ? 'Edit' : 'Add'} {tab}</h2></div><button aria-label="Reset form" onClick={reset} className="border border-blue-100 bg-blue-50 p-2 text-blue-600 shadow-sm hover:bg-blue-100"><Plus size={18} /></button></div>
+        {tab === 'menu' ? <div className="space-y-3">
+          <input className="field" placeholder="Name" value={menuForm.name} onChange={e => setMenuForm({ ...menuForm, name: e.target.value })} />
+          <select className="field" value={menuForm.category} onChange={e => setMenuForm({ ...menuForm, category: e.target.value })}><option>Coffee</option><option>Non-Coffee</option><option>Snack</option><option>Retail</option></select>
+          <input className="field" type="number" placeholder="Price" value={menuForm.price} onChange={e => setMenuForm({ ...menuForm, price: e.target.value })} />
+          <input className="field" type="number" placeholder="COGS" value={menuForm.cogs} onChange={e => setMenuForm({ ...menuForm, cogs: e.target.value })} />
+          <textarea className="field" placeholder="Description" value={menuForm.description} onChange={e => setMenuForm({ ...menuForm, description: e.target.value })} />
+        </div> : <div className="space-y-3">
+          <input className="field" placeholder="Discount name" value={discountForm.name} onChange={e => setDiscountForm({ ...discountForm, name: e.target.value })} />
+          <select className="field" value={discountForm.type} onChange={e => setDiscountForm({ ...discountForm, type: e.target.value as 'percentage' | 'flat' })}><option value="percentage">Percentage</option><option value="flat">Flat</option></select>
+          <input className="field" type="number" placeholder="Value" value={discountForm.value} onChange={e => setDiscountForm({ ...discountForm, value: e.target.value })} />
+          <input className="field" type="number" placeholder="Minimum subtotal" value={discountForm.minimum_subtotal} onChange={e => setDiscountForm({ ...discountForm, minimum_subtotal: e.target.value })} />
+        </div>}
+        <button disabled={saving} onClick={() => void save()} className="mt-5 w-full border border-blue-600 bg-blue-600 p-3 font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-50">{saving ? 'Saving...' : editingId ? 'Update' : 'Save'}</button>
+        </aside>
         </div>
-      </div>
+      </main>
     </div>
   );
-} 
+}

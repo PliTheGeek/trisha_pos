@@ -1,9 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Coffee, Croissant, Search, ShoppingBag, Trash2, User, X, Tag, Store, History, Settings, Flame, Menu, Banknote, QrCode, CreditCard, Bell, Pencil, Receipt } from 'lucide-react';
+import { Coffee, Croissant, Search, ShoppingBag, Trash2, User, X, Tag, Store, History, Settings, Flame, Menu, Banknote, QrCode, CreditCard, Pencil, Receipt } from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
+import { createTransaction } from '@/app/actions/transactions';
+import { listDiscounts } from '@/app/actions/discounts';
+import { listMenu } from '@/app/actions/menu';
 
 const normalizeCategory = (category: unknown) => {
   const value = String(category ?? '').trim().toLowerCase().replace(/\s+/g, '_');
@@ -21,16 +24,7 @@ const menuCategories = ['All', 'Coffee', 'Non-Coffee', 'Snacks', 'Retail'];
 export default function PosInterface() {
 
   // ---------------- DATA ----------------
-  const availableDiscounts = [
-    { id: 'D001', name: 'Opening Promo', type: 'percentage', value: 10 },
-    { id: 'D002', name: 'Staff Meal', type: 'percentage', value: 50 },
-    { id: 'D003', name: 'BYO Cup', type: 'flat', value: 5000 },
-  ];
-
-  // Dummy incoming QR orders waiting for payment/cashier action
-  const [pendingQrOrders, setPendingQrOrders] = useState([
-    { id: '104', table: 'Table 4', customer: 'Budi', total: 30000, items: '1x Latte' }
-  ]);
+  const [availableDiscounts, setAvailableDiscounts] = useState<any[]>([]);
 
   // ---------------- STATE ----------------
   const [cart, setCart] = useState<any[]>([]); 
@@ -47,8 +41,6 @@ export default function PosInterface() {
   const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
   const [cashGiven, setCashGiven] = useState<number | ''>('');
   
-  // Notification Dropdown State
-  const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
@@ -56,42 +48,23 @@ export default function PosInterface() {
   useEffect(() => {
     async function getMenuItems() {
       try {
-        const sheetUrl = process.env.NEXT_PUBLIC_GOOGLE_SHEETS_URL;
-
-        if (!sheetUrl) {
-          throw new Error('NEXT_PUBLIC_GOOGLE_SHEETS_URL is not configured');
-        }
-
-        const response = await fetch(`${sheetUrl}?action=menu`, {
-          method: 'GET',
-          cache: 'no-store',
-        });
-
-        if (!response.ok) {
-          throw new Error(`Menu request failed with status ${response.status}`);
-        }
-
-        const data = await response.json();
-        const rows = Array.isArray(data) ? data : data.menu || data.data || [];
-
+        const [rows, discounts] = await Promise.all([listMenu(), listDiscounts()]);
         const normalizedItems = rows.map((item: any, index: number) => ({
           ...item,
-          id: String(item.id ?? item.product_id),
-          menuKey: `${String(item.id ?? item.product_id)}-${index}`,
-          name: item.name ?? item.product_name ?? item.product_id,
+          id: String(item.product_id),
+          menuKey: `${String(item.product_id)}-${index}`,
+          name: item.product_name,
           price: Number(item.price) || 0,
           category: normalizeCategory(item.category),
         }));
-
-        const duplicateIds = normalizedItems
-          .map((item: any) => item.id)
-          .filter((id: string, index: number, ids: string[]) => ids.indexOf(id) !== index);
-
-        if (duplicateIds.length > 0) {
-          console.warn('Duplicate menu IDs returned by Google Apps Script:', duplicateIds);
-        }
-
         setMenuItems(normalizedItems);
+        setAvailableDiscounts(discounts.filter((discount: any) => discount.is_active).map((discount: any) => ({
+          ...discount,
+          id: discount.discount_id,
+          name: discount.discount_name,
+          type: discount.discount_type,
+          value: Number(discount.discount_value),
+        })));
       } catch (error) {
         console.error('Failed to load menu:', error);
         setMenuItems([]);
@@ -157,56 +130,21 @@ export default function PosInterface() {
   };
 
   const submitOrder = async (paymentMethod: string) => {
-    const sheetUrl = process.env.NEXT_PUBLIC_GOOGLE_SHEETS_URL;
-
-    if (!sheetUrl) {
-      alert('Google Sheets URL is not configured.');
-      return;
-    }
-
     setIsSubmittingOrder(true);
 
     try {
-      const payload = new URLSearchParams({
-        action: 'createOrder',
-        payment_method: paymentMethod,
-        status: paymentMethod === 'Open Bill' ? 'Pending' : 'Paid',
-        cash_received: paymentMethod === 'Cash' ? String(cashGiven || 0) : '0',
-        change_due: paymentMethod === 'Cash' ? String(Math.max(0, Number(cashGiven || 0) - finalTotal)) : '0',
-        subtotal: String(subtotal),
-        discount_value: String(totalDiscountAmount),
-        total: String(finalTotal),
-        items: JSON.stringify(cart.map(item => ({
+      await createTransaction({
+        payment_method: paymentMethod === 'QRIS' ? 'qris' : paymentMethod === 'Cash' ? 'cash' : paymentMethod === 'Open Bill' ? 'open_bill' : 'card',
+        status: paymentMethod === 'Open Bill' ? 'pending' : 'paid',
+        cash_received: paymentMethod === 'Cash' ? Number(cashGiven || 0) : 0,
+        discount_ids: appliedDiscounts.map(discount => discount.id),
+        items: cart.map(item => ({
           product_id: item.id,
-          name: item.name,
-          qty: 1,
-          price: item.finalPrice,
+          quantity: 1,
           order_note: [item.notes, item.orderNote].filter(Boolean).join(', '),
-        }))),
+        })),
       });
-
-      const response = await fetch('/api/orders', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-        },
-        body: payload.toString(),
-      });
-      const responseText = await response.text();
-      let result: { success?: boolean; message?: string; response?: string };
-
-      try {
-        result = JSON.parse(responseText);
-      } catch {
-        throw new Error(`Order request returned an invalid response: ${responseText.slice(0, 160)}`);
-      }
-
-      if (!response.ok || result.success === false) {
-        const responsePreview = result.response ? ` ${result.response}` : '';
-        throw new Error(`${result.message || 'Failed to save order.'}${responsePreview}`);
-      }
-
-      alert(`Order saved to database! Paid via ${paymentMethod}.`);
+      alert(`Order saved to Supabase. Paid via ${paymentMethod}.`);
       setCart([]);
       setAppliedDiscounts([]);
       setIsCheckoutModalOpen(false);
@@ -216,20 +154,6 @@ export default function PosInterface() {
     } finally {
       setIsSubmittingOrder(false);
     }
-  };
-
-  // Pull a pending QR order directly into the cashier's cart to check out
-  const loadQrOrderToCart = (order: any) => {
-    setCart([{
-      cartId: Math.random().toString(),
-      id: 'QR',
-      name: order.items,
-      finalPrice: order.total,
-      notes: `QR Order - ${order.customer} (${order.table})`,
-      orderNote: ''
-    }]);
-    setPendingQrOrders(pendingQrOrders.filter(o => o.id !== order.id));
-    setIsNotifOpen(false);
   };
 
   // ---------------- MATH LOGIC ----------------
@@ -413,7 +337,7 @@ export default function PosInterface() {
           <div className="flex items-center gap-2 md:gap-6">
             <button onClick={() => setIsMobileMenuOpen(true)} className="md:hidden p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg"><Menu size={20} /></button>
             <h1 className="text-x2 font-black tracking-tight text-slate-800 flex items-center gap-2">
-              <Image src="/logo/logo.png" alt="Trisha Cafe Logo" width={28} height={28} className="object-contain" /> TRISHA POS
+              <Image src="/logo/logo.png" alt="Trisha Cafe Logo" width={32} height={32} quality={90} className="object-contain" /> TRISHA POS
             </h1>
             <nav className="hidden md:flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
               <Link href="/" className="px-4 py-1.5 rounded-md text-sm font-bold bg-white text-blue-600 shadow-sm">POS</Link>
@@ -425,46 +349,6 @@ export default function PosInterface() {
           </div>
 
           <div className="flex items-center gap-3">
-            {/* NOTIFICATION BELL COUNTER */}
-            <div className="relative">
-              <button onClick={() => setIsNotifOpen(!isNotifOpen)} className="p-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-600 relative transition-colors">
-                <Bell size={20} />
-                {pendingQrOrders.length > 0 && (
-                  <span className="absolute -top-1 -right-1 bg-red-500 text-white font-bold text-xs w-5 h-5 rounded-full flex items-center justify-center animate-bounce">
-                    {pendingQrOrders.length}
-                  </span>
-                )}
-              </button>
-
-              {/* Notification Dropdown */}
-              {isNotifOpen && (
-                <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-2xl border border-slate-200 z-50 overflow-hidden">
-                  <div className="p-3 bg-slate-50 border-b border-slate-100 flex justify-between items-center">
-                    <span className="font-bold text-sm text-slate-800">Pending QR Orders</span>
-                    <span className="bg-red-100 text-red-600 text-xs font-bold px-2 py-0.5 rounded-full">{pendingQrOrders.length} new</span>
-                  </div>
-                  <div className="max-h-64 overflow-y-auto divide-y divide-slate-100">
-                    {pendingQrOrders.length === 0 ? (
-                      <div className="p-4 text-center text-slate-400 text-sm">No pending QR orders</div>
-                    ) : (
-                      pendingQrOrders.map(order => (
-                        <div key={order.id} onClick={() => loadQrOrderToCart(order)} className="p-3 hover:bg-blue-50/50 cursor-pointer transition-colors flex justify-between items-center">
-                          <div>
-                            <h4 className="font-bold text-sm text-slate-800">{order.table} ({order.customer})</h4>
-                            <p className="text-xs text-slate-500">{order.items}</p>
-                          </div>
-                          <div className="text-right">
-                            <span className="font-bold text-blue-600 text-sm block">Rp {order.total.toLocaleString('id-ID')}</span>
-                            <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-1.5 py-0.5 rounded">Checkout</span>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-
             <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg hidden sm:flex">
               <Search size={18} className="text-slate-400" />
               <input type="text" placeholder="Search menu..." className="bg-transparent border-none outline-none text-sm w-28 lg:w-36" />

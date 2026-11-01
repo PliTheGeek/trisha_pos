@@ -1,148 +1,103 @@
-import { ArrowLeft, CheckCircle2, Clock, Coffee } from 'lucide-react';
-import Link from 'next/link';
+'use client';
 
-type OrderItem = {
-  qty: number;
-  name: string;
-  note?: string;
+import { useCallback, useEffect, useState } from 'react';
+import { ArrowLeft, CheckCircle2, Coffee } from 'lucide-react';
+import Link from 'next/link';
+import { listKitchenOrders, finishKitchenOrder } from '@/app/actions/kitchen';
+import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
+
+type KitchenItem = {
+  product_id: string;
+  product_name: string;
+  quantity: number;
+  price: number;
+  order_note: string;
 };
 
-type ActiveOrder = {
-  id: string;
-  table: string;
-  time: string;
-  waitTime: string;
-  status: 'urgent' | 'normal';
-  items: OrderItem[];
+type KitchenOrder = {
+  kitchen_order_id: string;
+  order_number: string;
+  items: KitchenItem[];
+  notes: string;
+  status: 'queued' | 'finished';
+  created_at: string;
 };
 
 export default function KitchenInterface() {
-  // Dummy incoming orders
-  const activeOrders: ActiveOrder[] = [
-    { 
-      id: '101', 
-      table: 'Table 4', 
-      time: '10:15 AM', 
-      waitTime: '4 min', 
-      status: 'urgent', // custom flag for styling
-      items: [
-        { qty: 2, name: 'V60 Filter' }, 
-        { qty: 1, name: 'Butter Croissant' }
-      ] 
-    },
-    { 
-      id: '102', 
-      table: 'Takeaway', 
-      time: '10:17 AM', 
-      waitTime: '2 min', 
-      status: 'normal',
-      items: [
-        { qty: 1, name: 'Japanese Iced', note: 'Less Ice' }
-      ] 
-    },
-    { 
-      id: '103', 
-      table: 'Table 2', 
-      time: '10:18 AM', 
-      waitTime: '1 min', 
-      status: 'normal',
-      items: [
-        { qty: 1, name: 'Latte', note: 'Oat Milk' },
-        { qty: 1, name: 'Latte', note: 'Hot' }
-      ] 
+  const [orders, setOrders] = useState<KitchenOrder[]>([]);
+  const [error, setError] = useState('');
+  const [finishingId, setFinishingId] = useState<string | null>(null);
+
+  const loadOrders = useCallback(async () => {
+    try {
+      setOrders(await listKitchenOrders() as KitchenOrder[]);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : 'Failed to load kitchen queue.');
     }
-  ];
+  }, []);
+
+  // Load the current queue once, then keep it synchronized through Realtime.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { void loadOrders(); }, [loadOrders]);
+
+  useEffect(() => {
+    const supabase = createSupabaseBrowserClient();
+    const channel = supabase
+      .channel('kitchen-orders')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'kitchen_orders' },
+        payload => setOrders(current => {
+          const incoming = payload.new as KitchenOrder;
+          if (current.some(order => order.kitchen_order_id === incoming.kitchen_order_id)) return current;
+          return [...current, incoming];
+        }))
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'kitchen_orders' },
+        payload => {
+          const updated = payload.new as KitchenOrder;
+          if (updated.status === 'finished') {
+            setOrders(current => current.filter(order => order.kitchen_order_id !== updated.kitchen_order_id));
+          }
+        })
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
+  }, []);
+
+  async function markFinished(order: KitchenOrder) {
+    setFinishingId(order.kitchen_order_id);
+    try {
+      await finishKitchenOrder(order.kitchen_order_id);
+      setOrders(current => current.filter(item => item.kitchen_order_id !== order.kitchen_order_id));
+    } catch (finishError) {
+      setError(finishError instanceof Error ? finishError.message : 'Failed to finish order.');
+    } finally {
+      setFinishingId(null);
+    }
+  }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 p-6 flex flex-col h-screen">
-      
-      {/* Header (Matches the Management Page style) */}
-      <header className="bg-white p-4 shadow-sm rounded-xl flex justify-between items-center mb-6 border border-slate-200">
+    <div className="flex min-h-screen flex-col bg-slate-50 p-6 text-slate-800">
+      <header className="mb-6 flex items-center justify-between rounded-xl border bg-white p-4 shadow-sm">
         <div className="flex items-center gap-4">
-          <Link href="/" className="p-2 bg-slate-100 rounded-lg hover:bg-slate-200 text-slate-600 transition-colors">
-            <ArrowLeft size={20} />
-          </Link>
-          <div className="flex items-center gap-2">
-            <Coffee className="text-slate-700" size={24} />
-            <h1 className="text-xl font-bold tracking-tight">Barista Board</h1>
-          </div>
+          <Link href="/" className="rounded-lg bg-slate-100 p-2"><ArrowLeft size={20} /></Link>
+          <div className="flex items-center gap-2"><Coffee size={24} /><h1 className="text-xl font-bold">Kitchen Queue</h1></div>
         </div>
-        
-        {/* Live Indicator */}
-        <div className="flex items-center gap-2 bg-blue-50 border border-blue-100 px-4 py-2 rounded-lg text-blue-700 font-bold tracking-widest text-sm shadow-sm">
-          <span className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.8)]"></span>
-          LIVE SYNC
+        <div className="flex items-center gap-2 rounded-lg bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700">
+          <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-blue-500" /> LIVE
         </div>
       </header>
-
-      {/* Kanban Board Grid */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 pb-6">
-          
-          {activeOrders.map((order) => (
-            <div 
-              key={order.id} 
-              className={`bg-white rounded-xl border flex flex-col shadow-sm transition-all ${
-                order.status === 'urgent' 
-                  ? 'border-red-200 shadow-[0_4px_12px_rgba(239,68,68,0.1)]' 
-                  : 'border-slate-200'
-              }`}
-            >
-              
-              {/* Ticket Header */}
-              <div className={`p-4 flex justify-between items-center border-b rounded-t-xl ${
-                order.status === 'urgent' ? 'bg-red-50 border-red-100' : 'bg-slate-50 border-slate-100'
-              }`}>
-                <div>
-                  <h2 className="font-bold text-xl text-slate-800">{order.table}</h2>
-                  <span className="text-xs text-slate-500 font-medium">Order #{order.id}</span>
-                </div>
-                <div className={`flex items-center gap-1 font-mono font-bold px-2 py-1 rounded ${
-                  order.status === 'urgent' ? 'text-red-600 bg-red-100' : 'text-amber-600 bg-amber-50'
-                }`}>
-                  <Clock size={16} />
-                  <span>{order.waitTime}</span>
-                </div>
-              </div>
-
-              {/* Ticket Items (The main content) */}
-              <div className="p-5 flex-1">
-                <ul className="space-y-4">
-                  {order.items.map((item, idx) => (
-                    <li key={idx} className="flex gap-4 items-start border-b border-slate-100 pb-4 last:border-0 last:pb-0">
-                      {/* Quantity Badge */}
-                      <span className="bg-slate-800 text-white font-bold px-3 py-1.5 rounded-lg text-lg shadow-sm">
-                        {item.qty}
-                      </span>
-                      
-                      {/* Item Details */}
-                      <div className="flex-1 pt-0.5">
-                        <p className="text-lg font-bold text-slate-800 leading-none">{item.name}</p>
-                        
-                        {/* Modifiers (if any exist) */}
-                        {item.note && (
-                          <p className="text-sm font-semibold text-blue-600 mt-2 bg-blue-50 inline-block px-2.5 py-1 rounded-md border border-blue-100">
-                            + {item.note}
-                          </p>
-                        )}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              {/* Kitchen Action Button */}
-              <div className="p-4 bg-slate-50 border-t border-slate-100 rounded-b-xl">
-                <button className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3.5 rounded-lg flex justify-center items-center gap-2 transition-colors shadow-sm">
-                  <CheckCircle2 size={20} />
-                  Mark as Done
-                </button>
-              </div>
-
+      {error && <p className="mb-4 rounded-lg bg-red-50 p-3 text-red-700">{error}</p>}
+      {orders.length === 0 && <div className="rounded-xl border bg-white p-10 text-center text-slate-500">No queued orders.</div>}
+      <div className="grid flex-1 grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
+        {orders.map((order, index) => {
+          const queueNumber = index + 1;
+          return <div key={order.kitchen_order_id} className="flex flex-col rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="flex items-center justify-between border-b bg-slate-50 p-4">
+              <div><h2 className="text-xl font-bold">{order.order_number}</h2><p className="text-xs text-slate-500">{new Date(order.created_at).toLocaleTimeString('id-ID')}</p></div>
+              <div className="rounded-lg bg-blue-100 px-3 py-1.5 text-lg font-black text-blue-700">#{queueNumber}</div>
             </div>
-          ))}
-
-        </div>
+            <div className="flex-1 p-5"><ul className="space-y-4">{order.items.map((item, index) => <li key={`${order.kitchen_order_id}-${item.product_id}-${index}`} className="flex gap-4 border-b pb-4 last:border-0"><span className="rounded-lg bg-slate-800 px-3 py-1.5 text-lg font-bold text-white">{item.quantity}</span><div><p className="font-bold">{item.product_name}</p>{item.order_note && <p className="mt-1 text-sm font-semibold text-blue-600">+ {item.order_note}</p>}</div></li>)}</ul>{order.notes && <p className="mt-4 text-sm text-slate-500">{order.notes}</p>}</div>
+            <div className="rounded-b-xl border-t bg-slate-50 p-4"><button disabled={finishingId === order.kitchen_order_id} onClick={() => void markFinished(order)} className="flex w-full items-center justify-center gap-2 rounded-lg bg-slate-800 py-3.5 font-bold text-white disabled:opacity-50"><CheckCircle2 size={20} />{finishingId === order.kitchen_order_id ? 'Finishing...' : 'Mark as Finished'}</button></div>
+          </div>;
+        })}
       </div>
     </div>
   );
