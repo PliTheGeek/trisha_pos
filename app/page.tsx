@@ -10,6 +10,7 @@ import { listMenu } from '@/app/actions/menu';
 
 // ---------------- TYPES ----------------
 type PaymentMethod = 'cash' | 'qris' | 'card';
+type OrderType = 'dine_in' | 'takeaway';
 
 type PaymentLine = {
   method: PaymentMethod;
@@ -80,6 +81,7 @@ export default function PosInterface() {
   // Order info
   const [orderName, setOrderName] = useState('');
   const [orderContact, setOrderContact] = useState('');
+  const [orderType, setOrderType] = useState<OrderType>('dine_in');
 
   // Modals & Drawers
   const [selectedItem, setSelectedItem] = useState<any>(null);
@@ -306,6 +308,7 @@ export default function PosInterface() {
       '*TRISHA CAFE*',
       date,
       ...(orderName.trim() ? [`Order: ${orderName.trim()}`] : []),
+      `Type: ${orderType === 'dine_in' ? 'Dine in' : 'Takeaway'}`,
       divider,
       ...itemLines,
       divider,
@@ -347,6 +350,7 @@ export default function PosInterface() {
         cash_received: payments.reduce((sum, p) => sum + p.cashReceived, 0),
         customer_name: orderName.trim() || null,
         customer_contact: contact || null,
+        order_type: orderType,
         payments: payments.map(p => ({
           method: p.method,
           amount: p.amount,
@@ -375,6 +379,7 @@ export default function PosInterface() {
       setAppliedDiscounts([]);
       setOrderName('');
       setOrderContact('');
+      setOrderType('dine_in');
       closeCheckout();
     } catch (error) {
       waWindow?.close();
@@ -750,6 +755,21 @@ export default function PosInterface() {
             placeholder="WhatsApp (08xx...)"
             className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500 min-w-0"
           />
+        </div>
+        <div className="grid grid-cols-2 gap-2 border-b border-slate-100 bg-white p-3 pt-0">
+          {([
+            { value: 'dine_in', label: 'Dine in' },
+            { value: 'takeaway', label: 'Takeaway' },
+          ] as const).map(option => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => setOrderType(option.value)}
+              className={`rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${orderType === option.value ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
+            >
+              {option.label}
+            </button>
+          ))}
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 bg-slate-50/50">

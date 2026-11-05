@@ -14,6 +14,8 @@ type TransactionPaymentInput = {
   cash_received: number;
 };
 
+export type OpenBillPaymentInput = TransactionPaymentInput;
+
 export async function createTransaction(input: {
   payment_method: 'cash' | 'qris' | 'card' | 'split' | 'open_bill';
   items: TransactionItemInput[];
@@ -23,6 +25,7 @@ export async function createTransaction(input: {
   notes?: string;
   customer_name?: string | null;
   customer_contact?: string | null;
+  order_type?: 'dine_in' | 'takeaway';
   payments?: TransactionPaymentInput[];
 }) {
   const supabase = await createSupabaseServerClient();
@@ -43,6 +46,7 @@ export async function createTransaction(input: {
     p_transaction_id: data,
     p_customer_name: input.customer_name ?? null,
     p_customer_contact: input.customer_contact ?? null,
+    p_order_type: input.order_type ?? 'dine_in',
     p_payments: input.payments ?? [],
   });
   if (detailsError) throw new Error(detailsError.message);
@@ -98,19 +102,31 @@ export async function listTransactions(options?: {
   return data;
 }
 
-export async function closeOpenBill(transactionId: string) {
+export async function payOpenBill(transactionId: string, payments: OpenBillPaymentInput[]) {
+  const supabase = await createSupabaseServerClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Authentication required');
+
+  const { error } = await supabase.rpc('settle_pos_open_bill', {
+    p_transaction_id: transactionId,
+    p_payments: payments,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function cancelOpenBill(transactionId: string) {
   const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Authentication required');
 
   const { data, error } = await supabase
     .from('transactions')
-    .update({ status: 'paid' })
+    .update({ status: 'voided' })
     .eq('transaction_id', transactionId)
     .eq('cashier_id', user.id)
     .eq('payment_method', 'open_bill')
     .eq('status', 'pending')
-    .select()
+    .select('transaction_id, status')
     .single();
 
   if (error) throw new Error(error.message);
