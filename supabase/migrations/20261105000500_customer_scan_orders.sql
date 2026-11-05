@@ -50,7 +50,7 @@ as $$
           'category', menu.category,
           'price', menu.price,
           'description', menu.description,
-          'options', coalesce(menu.options, '[]'::jsonb)
+          'options', coalesce(to_jsonb(menu)->'options', '[]'::jsonb)
         )
         order by menu.product_name
       )
@@ -145,7 +145,7 @@ begin
       menu.product_id,
       menu.product_name,
       menu.price,
-      coalesce(menu.options, '[]'::jsonb) as options
+      coalesce(to_jsonb(menu)->'options', '[]'::jsonb) as options
     into v_menu_item
     from public.menu_items as menu
     where menu.product_id::text = v_order_item.product_id
