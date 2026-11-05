@@ -8,13 +8,22 @@ type TransactionItemInput = {
   order_note?: string;
 };
 
+type TransactionPaymentInput = {
+  method: 'cash' | 'qris' | 'card';
+  amount: number;
+  cash_received: number;
+};
+
 export async function createTransaction(input: {
-  payment_method: 'cash' | 'qris' | 'card' | 'open_bill';
+  payment_method: 'cash' | 'qris' | 'card' | 'split' | 'open_bill';
   items: TransactionItemInput[];
   discount_ids?: string[];
   cash_received?: number;
   status?: 'pending' | 'paid' | 'voided';
   notes?: string;
+  customer_name?: string | null;
+  customer_contact?: string | null;
+  payments?: TransactionPaymentInput[];
 }) {
   const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -29,6 +38,14 @@ export async function createTransaction(input: {
     p_notes: input.notes ?? '',
   });
   if (error) throw new Error(error.message);
+
+  const { error: detailsError } = await supabase.rpc('record_pos_transaction_details', {
+    p_transaction_id: data,
+    p_customer_name: input.customer_name ?? null,
+    p_customer_contact: input.customer_contact ?? null,
+    p_payments: input.payments ?? [],
+  });
+  if (detailsError) throw new Error(detailsError.message);
 
   const productIds = input.items.map(item => item.product_id);
   const { data: menuItems, error: menuError } = await supabase
@@ -71,7 +88,7 @@ export async function listTransactions(options?: {
   if (!user) throw new Error('Authentication required');
   let query = supabase
     .from('transactions')
-    .select('*, transaction_items(*), transaction_discounts(*)')
+    .select('*, transaction_items(*), transaction_discounts(*), transaction_payments(*)')
     .order('created_at', { ascending: false })
     .limit(options?.limit ?? 1000);
   if (options?.from) query = query.gte('created_at', options.from);

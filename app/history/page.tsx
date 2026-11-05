@@ -14,7 +14,10 @@ type Transaction = {
   subtotal: number;
   discount_total: number;
   total: number;
+  customer_name: string | null;
+  customer_contact: string | null;
   transaction_items: { product_name: string; quantity: number; price: number; order_note: string }[];
+  transaction_payments: { method: string; amount: number; cash_received: number }[];
 };
 
 function periodBounds(period: Period) {
@@ -30,6 +33,20 @@ function periodBounds(period: Period) {
 
 function csvCell(value: string | number) {
   return `"${String(value).replaceAll('"', '""')}"`;
+}
+
+function formatPaymentMethod(method: string) {
+  if (method === 'card') return 'Other';
+  return method.replaceAll('_', ' ').toUpperCase();
+}
+
+function paymentSummary(transaction: Transaction) {
+  if (transaction.transaction_payments?.length) {
+    return transaction.transaction_payments
+      .map(payment => `${formatPaymentMethod(payment.method)} Rp ${Number(payment.amount).toLocaleString('id-ID')}`)
+      .join(' + ');
+  }
+  return formatPaymentMethod(transaction.payment_method);
 }
 
 export default function HistoryInterface() {
@@ -81,11 +98,15 @@ export default function HistoryInterface() {
 
   function exportCsv() {
     const rows = [
-      ['Transaction ID', 'Date', 'Payment', 'Status', 'Subtotal', 'Discount', 'Total', 'Items'],
+      ['Transaction ID', 'Date', 'Order Name', 'Phone', 'Payment', 'Status', 'Subtotal', 'Discount', 'Total', 'Items'],
       ...transactions.map(item => [
         item.transaction_id,
         new Date(item.created_at).toLocaleString('id-ID'),
-        item.payment_method.toUpperCase(),
+        item.customer_name ?? '',
+        item.customer_contact ?? '',
+        item.transaction_payments?.map(payment =>
+          `${formatPaymentMethod(payment.method)} Rp ${Number(payment.amount).toLocaleString('id-ID')}`
+        ).join('; ') || formatPaymentMethod(item.payment_method),
         item.status,
         item.subtotal,
         item.discount_total,
@@ -129,16 +150,17 @@ export default function HistoryInterface() {
         <section className="print-sales-activity overflow-hidden border border-slate-200 bg-white shadow-sm">
           <div className="flex items-center justify-between border-b px-4 py-4 sm:px-5"><div><h2 className="font-bold">Sales activity</h2><p className="text-xs text-slate-400">Showing {period} records</p></div>{loading && <span className="text-sm text-slate-400">Loading...</span>}</div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[700px] text-left text-sm">
-              <thead><tr className="border-b bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><th className="px-5 py-3">Date</th><th className="px-5 py-3">Payment</th><th className="px-5 py-3">Status</th><th className="px-5 py-3 text-right">Total</th><th className="px-5 py-3 text-right">Details</th></tr></thead>
+            <table className="w-full min-w-[850px] text-left text-sm">
+              <thead><tr className="border-b bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><th className="px-5 py-3">Date</th><th className="px-5 py-3">Order</th><th className="px-5 py-3">Payment</th><th className="px-5 py-3">Status</th><th className="px-5 py-3 text-right">Total</th><th className="px-5 py-3 text-right">Details</th></tr></thead>
               <tbody>
-                {!loading && !transactions.length && <tr><td colSpan={5} className="px-5 py-12 text-center text-slate-400">No transactions in this period.</td></tr>}
+                {!loading && !transactions.length && <tr><td colSpan={6} className="px-5 py-12 text-center text-slate-400">No transactions in this period.</td></tr>}
                 {transactions.map(transaction => {
                   const isOpenBill = transaction.payment_method.toLowerCase() === 'open_bill';
                   const isPending = transaction.status.toLowerCase() === 'pending';
                   return <tr key={transaction.transaction_id} className="border-b last:border-0 hover:bg-slate-50">
                     <td className="whitespace-nowrap px-5 py-4">{new Date(transaction.created_at).toLocaleString('id-ID')}</td>
-                    <td className="px-5 py-4 font-medium">{transaction.payment_method.replaceAll('_', ' ').toUpperCase()}</td>
+                    <td className="px-5 py-4"><div className="font-medium">{transaction.customer_name || 'Walk-in'}</div>{transaction.customer_contact && <div className="text-xs text-slate-400">{transaction.customer_contact}</div>}</td>
+                    <td className="px-5 py-4 font-medium">{paymentSummary(transaction)}</td>
                     <td className="px-5 py-4"><span className={`border px-2.5 py-1 text-xs font-semibold ${isPending ? 'border-amber-200 bg-amber-100 text-amber-700' : 'border-emerald-200 bg-emerald-100 text-emerald-700'}`}>{transaction.status}</span></td>
                     <td className="px-5 py-4 text-right font-bold">Rp {Number(transaction.total).toLocaleString('id-ID')}</td>
                     <td className="px-5 py-4 text-right"><div className="flex justify-end gap-2">
@@ -156,8 +178,25 @@ export default function HistoryInterface() {
       {selected && <div className="fixed inset-0 z-10 flex items-center justify-center bg-slate-900/50 p-4" onClick={() => setSelected(null)}>
         <div className="w-full max-w-md border border-slate-200 bg-white p-5 shadow-xl" onClick={event => event.stopPropagation()}>
           <div className="mb-5 flex items-start justify-between"><div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Transaction</p><h2 className="font-bold">#{selected.transaction_id.slice(0, 8)}</h2></div><button onClick={() => setSelected(null)} className="border border-slate-200 p-1 text-slate-400 shadow-sm hover:bg-slate-100"><X size={20} /></button></div>
-          <div className="space-y-3 border-b pb-4">{selected.transaction_items.map((item, index) => <div key={`${item.product_name}-${item.order_note}-${index}`} className="flex justify-between gap-4 text-sm"><span>{item.quantity}x {item.product_name}</span><span className="whitespace-nowrap">Rp {Number(item.price * item.quantity).toLocaleString('id-ID')}</span></div>)}</div>
+          <div className="mb-4 border-b pb-4 text-sm">
+            <p><span className="font-semibold">Order:</span> {selected.customer_name || 'Walk-in'}</p>
+            {selected.customer_contact && <p><span className="font-semibold">Phone:</span> {selected.customer_contact}</p>}
+          </div>
+          <div className="space-y-3 border-b pb-4">{selected.transaction_items.map((item, index) => <div key={`${item.product_name}-${item.order_note}-${index}`} className="flex justify-between gap-4 text-sm"><div><p>{item.quantity}x {item.product_name}</p>{item.order_note && <p className="text-xs text-slate-400">{item.order_note}</p>}</div><span className="whitespace-nowrap">Rp {Number(item.price * item.quantity).toLocaleString('id-ID')}</span></div>)}</div>
+          <div className="mt-4 space-y-1 text-sm">
+            <div className="flex justify-between"><span>Subtotal</span><span>Rp {Number(selected.subtotal).toLocaleString('id-ID')}</span></div>
+            <div className="flex justify-between"><span>Discount</span><span>- Rp {Number(selected.discount_total).toLocaleString('id-ID')}</span></div>
+          </div>
           <div className="mt-4 flex justify-between text-lg font-bold"><span>Total</span><span>Rp {Number(selected.total).toLocaleString('id-ID')}</span></div>
+          <div className="mt-4 border-t pt-3">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Payment</p>
+            {selected.transaction_payments?.length
+              ? selected.transaction_payments.map((payment, index) => <div key={`${payment.method}-${index}`} className="flex justify-between gap-4 text-sm">
+                  <span>{formatPaymentMethod(payment.method)}{payment.method === 'cash' && payment.cash_received > payment.amount ? ` (received Rp ${Number(payment.cash_received).toLocaleString('id-ID')}, change Rp ${Number(payment.cash_received - payment.amount).toLocaleString('id-ID')})` : ''}</span>
+                  <span className="whitespace-nowrap">Rp {Number(payment.amount).toLocaleString('id-ID')}</span>
+                </div>)
+              : <p className="text-sm">{formatPaymentMethod(selected.payment_method)}</p>}
+          </div>
           {selected.payment_method.toLowerCase() === 'open_bill' && selected.status.toLowerCase() === 'pending' && <button disabled={closingId === selected.transaction_id} onClick={() => void closeBill(selected)} className="mt-5 w-full border border-emerald-600 bg-emerald-600 p-3 font-bold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50">{closingId === selected.transaction_id ? 'Closing...' : 'Close Open Bill'}</button>}
         </div>
       </div>}
