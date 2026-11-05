@@ -1,265 +1,364 @@
 'use client';
 
-import { useState } from 'react';
-import { Coffee, Croissant, ShoppingBag, X, CheckCircle2, ChevronRight, Utensils } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Banknote, CheckCircle2, ChevronRight, Coffee, CreditCard, Minus, Plus,
+  QrCode, ShoppingBag, Truck, Utensils, X,
+} from 'lucide-react';
+import {
+  listScanMenu,
+  submitScanOrder,
+  type ScanOrderType,
+  type ScanPaymentMethod,
+} from '@/app/actions/scan-orders';
+
+type MenuChoice = { name: string; addPrice: number };
+type MenuOption = { group: string; choices: MenuChoice[] };
+type MenuItem = {
+  product_id: string;
+  product_name: string;
+  category: string;
+  price: number;
+  description: string | null;
+  options: MenuOption[] | null;
+};
+type CartLine = {
+  cart_id: string;
+  item: MenuItem;
+  selections: Record<string, string>;
+  quantity: number;
+  unit_price: number;
+};
+
+const orderTypes: { value: ScanOrderType; label: string; Icon: typeof Utensils }[] = [
+  { value: 'dine_in', label: 'Dine in', Icon: Utensils },
+  { value: 'takeaway', label: 'Takeaway / pickup', Icon: ShoppingBag },
+  { value: 'delivery', label: 'Delivery', Icon: Truck },
+];
+
+const paymentOptions: { value: ScanPaymentMethod; label: string; Icon: typeof Banknote }[] = [
+  { value: 'cash', label: 'Cash', Icon: Banknote },
+  { value: 'qris', label: 'QRIS', Icon: QrCode },
+  { value: 'card', label: 'Other / card', Icon: CreditCard },
+];
+
+function normalizeWhatsAppNumber(value: string) {
+  const trimmed = value.trim();
+  const digits = trimmed.replace(/\D/g, '');
+  if (!digits || trimmed.startsWith('+') || digits.startsWith('62')) return digits;
+  if (digits.startsWith('0')) return `62${digits.slice(1)}`;
+  if (digits.startsWith('8')) return `62${digits}`;
+  return digits;
+}
+
+function formatRp(value: number) {
+  return `Rp ${value.toLocaleString('id-ID')}`;
+}
 
 export default function CustomerMenu() {
-  // ---------------- DATA ----------------
-  const menuItems = [
-    { id: 'M001', name: 'V60 Filter', price: 35000, category: 'Coffee', desc: 'Single origin manual brew' },
-    { 
-      id: 'M002', name: 'Latte', price: 30000, category: 'Coffee', desc: 'Espresso with steamed milk',
-      options: [
-        { group: 'Temperature', choices: [{ name: 'Hot', addPrice: 0 }, { name: 'Iced', addPrice: 3000 }] },
-        { group: 'Milk Type', choices: [{ name: 'Fresh Milk', addPrice: 0 }, { name: 'Oat Milk', addPrice: 8000 }] }
-      ]
-    },
-    { id: 'M003', name: 'Butter Croissant', price: 25000, category: 'Snack', desc: 'Flaky, buttery pastry' },
-    { id: 'M004', name: 'Mineral Water', price: 15000, category: 'Retail', desc: '600ml bottled water' },
-  ];
-
-  // ---------------- STATE ----------------
-  const [activeCategory, setActiveCategory] = useState('Coffee');
-  const [cart, setCart] = useState<any[]>([]); 
-  
-  // Modals
-  const [selectedItem, setSelectedItem] = useState<any>(null); 
-  const [tempOptions, setTempOptions] = useState<any>({}); 
+  const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [activeCategory, setActiveCategory] = useState('All');
+  const [cart, setCart] = useState<CartLine[]>([]);
+  const [selectedItem, setSelectedItem] = useState<MenuItem | null>(null);
+  const [selections, setSelections] = useState<Record<string, string>>({});
   const [isCartOpen, setIsCartOpen] = useState(false);
-  const [orderPlaced, setOrderPlaced] = useState(false); // Success screen state
-
-  // Customer Details (For the kitchen to identify them)
   const [customerName, setCustomerName] = useState('');
-  const [tableNumber, setTableNumber] = useState('4'); // Usually pulled from the URL (e.g., ?table=4)
+  const [customerContact, setCustomerContact] = useState('');
+  const [orderType, setOrderType] = useState<ScanOrderType>('dine_in');
+  const [paymentMethod, setPaymentMethod] = useState<ScanPaymentMethod>('cash');
+  const [orderNotes, setOrderNotes] = useState('');
+  const [orderNumber, setOrderNumber] = useState('');
+  const [orderTotal, setOrderTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState(false);
 
-  // ---------------- ACTIONS ----------------
-  const handleProductClick = (item: any) => {
-    if (item.options && item.options.length > 0) {
-      setSelectedItem(item);
-      setTempOptions({}); 
-    } else {
-      addToCart(item, {});
-    }
-  };
+  useEffect(() => {
+    let active = true;
+    listScanMenu()
+      .then(menu => {
+        if (!active) return;
+        setMenuItems(menu.items);
+        setCategories(menu.categories);
+        setActiveCategory(menu.categories[0] ?? 'All');
+      })
+      .catch(loadError => {
+        if (active) setError(loadError instanceof Error ? loadError.message : 'Unable to load the menu.');
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
 
-  const handleOptionSelect = (groupName: string, choice: any) => {
-    setTempOptions({ ...tempOptions, [groupName]: choice });
-  };
+  const visibleItems = useMemo(
+    () => menuItems.filter(item => item.category === activeCategory),
+    [activeCategory, menuItems]
+  );
+  const total = cart.reduce((sum, line) => sum + line.unit_price * line.quantity, 0);
+  const itemCount = cart.reduce((sum, line) => sum + line.quantity, 0);
 
-  const addToCart = (item: any, selectedModifiers: any) => {
-    let finalPrice = item.price;
-    let notes: string[] = [];
-    Object.values(selectedModifiers).forEach((mod: any) => {
-      finalPrice += mod.addPrice;
-      if (mod.name !== 'Hot' && mod.name !== 'Fresh Milk') notes.push(mod.name);
+  function addToCart(item: MenuItem, chosenOptions: Record<string, string>) {
+    const optionPrice = (item.options ?? []).reduce((sum, group) => {
+      const choice = group.choices.find(option => option.name === chosenOptions[group.group]);
+      return sum + (choice?.addPrice ?? 0);
+    }, 0);
+    const unitPrice = Number(item.price) + optionPrice;
+    const optionKey = JSON.stringify(chosenOptions);
+
+    setCart(current => {
+      const existing = current.find(line =>
+        line.item.product_id === item.product_id
+        && line.unit_price === unitPrice
+        && JSON.stringify(line.selections) === optionKey
+      );
+      if (existing) {
+        return current.map(line => line.cart_id === existing.cart_id
+          ? { ...line, quantity: line.quantity + 1 }
+          : line);
+      }
+      return [...current, {
+        cart_id: crypto.randomUUID(),
+        item,
+        selections: chosenOptions,
+        quantity: 1,
+        unit_price: unitPrice,
+      }];
     });
+    setSelectedItem(null);
+    setSelections({});
+  }
 
-    setCart([...cart, { cartId: Math.random().toString(), id: item.id, name: item.name, finalPrice, notes: notes.join(', ') }]);
-    setSelectedItem(null); 
-  };
+  function updateQuantity(cartId: string, delta: number) {
+    setCart(current => current
+      .map(line => line.cart_id === cartId ? { ...line, quantity: line.quantity + delta } : line)
+      .filter(line => line.quantity > 0));
+  }
 
-  const removeFromCart = (cartId: string) => {
-    setCart(cart.filter(item => item.cartId !== cartId));
-    if (cart.length === 1) setIsCartOpen(false); // Close cart if empty
-  };
-
-  const submitOrder = () => {
-    if (!customerName) {
-      alert("Please enter your name so we can call your order!");
+  async function placeOrder() {
+    const normalizedContact = normalizeWhatsAppNumber(customerContact);
+    if (!customerName.trim()) {
+      setError('Enter your name to continue.');
       return;
     }
-    // This public ordering screen is separate from the authenticated cashier checkout.
-    setOrderPlaced(true);
-    setIsCartOpen(false);
-  };
+    if (!/^\d{9,15}$/.test(normalizedContact)) {
+      setError('Enter a valid WhatsApp number. Include your country code if you are outside Indonesia.');
+      return;
+    }
+    if (cart.length === 0) {
+      setError('Add at least one menu item to your order.');
+      return;
+    }
+    setSubmitting(true);
+    setError('');
+    try {
+      const result = await submitScanOrder({
+        customer_name: customerName.trim(),
+        customer_contact: normalizedContact,
+        order_type: orderType,
+        payment_method: orderType === 'delivery' ? null : paymentMethod,
+        notes: orderNotes.trim(),
+        items: cart.map(line => ({
+          product_id: line.item.product_id,
+          quantity: line.quantity,
+          selections: line.selections,
+        })),
+      });
+      setOrderNumber(result.order_number);
+      setOrderTotal(Number(result.total));
+      setSuccess(true);
+      setIsCartOpen(false);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'Unable to submit your order. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
-  // ---------------- MATH LOGIC ----------------
-  const subtotal = cart.reduce((sum, item) => sum + item.finalPrice, 0);
-
-  // ---------------- SUCCESS SCREEN ----------------
-  if (orderPlaced) {
+  if (success) {
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
-        <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mb-6">
+      <main className="flex min-h-screen flex-col items-center justify-center bg-slate-50 p-6 text-center text-slate-800">
+        <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100">
           <CheckCircle2 size={40} className="text-emerald-600" />
         </div>
-        <h1 className="text-2xl font-black text-slate-800 mb-2">Order Sent to Kitchen!</h1>
-        <p className="text-slate-500 mb-8">Thank you, {customerName}. The barista is preparing your order for Table {tableNumber}. Please proceed to the cashier to complete your payment.</p>
-        <button onClick={() => window.location.reload()} className="px-6 py-3 bg-white border border-slate-200 rounded-xl font-bold text-slate-600 shadow-sm">
-          View Menu Again
-        </button>
-      </div>
+        <h1 className="mb-2 text-2xl font-black">Order received</h1>
+        <p className="mb-2 text-lg font-bold text-blue-700">{orderNumber}</p>
+        <p className="mb-2 text-slate-600">Total: {formatRp(orderTotal)}</p>
+        <p className="max-w-md text-slate-500">
+          {orderType === 'delivery'
+            ? `Thanks, ${customerName}. Our cashier will contact you on WhatsApp to arrange delivery and payment.`
+            : `Thanks, ${customerName}. Your ${orderType === 'dine_in' ? 'dine-in' : 'pickup'} order is with the store. Payment preference: ${paymentOptions.find(option => option.value === paymentMethod)?.label}. Please complete payment with the cashier; no online payment was taken.`}
+        </p>
+      </main>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 pb-24 font-sans relative">
-      
-      {/* ----------------- MODALS ----------------- */}
-      
-      {/* 1. Item Customization Modal */}
+    <main className="relative min-h-screen bg-slate-50 pb-28 font-sans text-slate-800">
       {selectedItem && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 transition-all">
-          <div className="bg-white w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 sm:zoom-in-95">
-            <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-white sticky top-0 z-10">
-              <h2 className="text-xl font-black">{selectedItem.name}</h2>
-              <button onClick={() => setSelectedItem(null)} className="p-2 bg-slate-100 hover:bg-slate-200 rounded-full text-slate-500"><X size={20} /></button>
-            </div>
-            
-            <div className="p-6 overflow-y-auto flex-1 bg-slate-50">
-              {selectedItem.options.map((optionGroup: any, index: number) => (
-                <div key={index} className="mb-6 last:mb-0">
-                  <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider mb-3">Select {optionGroup.group}</h3>
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/60 p-0 backdrop-blur-sm sm:items-center sm:p-4">
+          <section className="flex max-h-[85vh] w-full flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:max-w-md sm:rounded-2xl">
+            <header className="flex items-center justify-between border-b p-5">
+              <div><h2 className="text-xl font-black">{selectedItem.product_name}</h2><p className="text-sm text-slate-500">{formatRp(Number(selectedItem.price))}</p></div>
+              <button onClick={() => setSelectedItem(null)} className="rounded-full bg-slate-100 p-2 text-slate-500"><X size={20} /></button>
+            </header>
+            <div className="flex-1 overflow-y-auto bg-slate-50 p-5">
+              {(selectedItem.options ?? []).map(group => (
+                <fieldset key={group.group} className="mb-5 last:mb-0">
+                  <legend className="mb-2 text-sm font-bold uppercase tracking-wide">{group.group}</legend>
                   <div className="flex flex-col gap-2">
-                    {optionGroup.choices.map((choice: any, cIdx: number) => {
-                      const isSelected = tempOptions[optionGroup.group]?.name === choice.name;
-                      return (
-                        <button key={cIdx} onClick={() => handleOptionSelect(optionGroup.group, choice)}
-                          className={`flex justify-between items-center p-4 rounded-xl border-2 transition-all text-left bg-white shadow-sm ${isSelected ? 'border-blue-600 ring-1 ring-blue-600' : 'border-transparent hover:border-blue-200'}`}>
-                          <div className="flex items-center gap-3">
-                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${isSelected ? 'border-blue-600' : 'border-slate-300'}`}>
-                              {isSelected && <div className="w-2.5 h-2.5 bg-blue-600 rounded-full" />}
-                            </div>
-                            <span className={`font-bold ${isSelected ? 'text-blue-700' : 'text-slate-700'}`}>{choice.name}</span>
-                          </div>
-                          {choice.addPrice > 0 && <span className="text-sm font-semibold text-slate-500">+Rp {choice.addPrice.toLocaleString('id-ID')}</span>}
-                        </button>
-                      );
-                    })}
+                    {group.choices.map(choice => (
+                      <button
+                        key={choice.name}
+                        type="button"
+                        onClick={() => setSelections(current => ({ ...current, [group.group]: choice.name }))}
+                        className={`flex items-center justify-between rounded-xl border-2 bg-white p-4 text-left ${selections[group.group] === choice.name ? 'border-blue-600' : 'border-transparent'}`}
+                      >
+                        <span className="font-semibold">{choice.name}</span>
+                        {choice.addPrice > 0 && <span className="text-sm text-slate-500">+{formatRp(choice.addPrice)}</span>}
+                      </button>
+                    ))}
                   </div>
-                </div>
+                </fieldset>
               ))}
             </div>
-            <div className="p-5 bg-white border-t border-slate-100 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
-              <button onClick={() => addToCart(selectedItem, tempOptions)} className="w-full bg-slate-800 text-white font-bold py-4 rounded-xl shadow-md text-lg active:scale-[0.98] transition-transform">
-                Add to Order
-              </button>
-            </div>
-          </div>
+            <footer className="border-t bg-white p-5">
+              <button onClick={() => addToCart(selectedItem, selections)} className="w-full rounded-xl bg-slate-800 py-4 text-lg font-bold text-white">Add to order</button>
+            </footer>
+          </section>
         </div>
       )}
 
-      {/* 2. Cart Review Modal (Bottom Sheet on Mobile) */}
       {isCartOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-          <div className="bg-white w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 sm:zoom-in-95">
-            <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-white sticky top-0">
-              <h2 className="text-xl font-black">Your Order</h2>
-              <button onClick={() => setIsCartOpen(false)} className="p-2 bg-slate-100 hover:bg-slate-200 rounded-full text-slate-500"><X size={20} /></button>
-            </div>
-            
-            <div className="p-6 overflow-y-auto flex-1 bg-slate-50 flex flex-col gap-3">
-              {cart.map((cartItem) => (
-                <div key={cartItem.cartId} className="flex justify-between items-start bg-white p-4 rounded-xl shadow-sm border border-slate-100">
-                  <div className="flex-1 pr-3">
-                    <h4 className="font-bold text-slate-800 text-lg">{cartItem.name}</h4>
-                    {cartItem.notes && <p className="text-slate-500 text-sm mt-1">{cartItem.notes}</p>}
-                    <button onClick={() => removeFromCart(cartItem.cartId)} className="text-red-500 text-sm font-semibold mt-2 text-left">Remove</button>
+        <div className="fixed inset-0 z-40 flex items-end justify-center bg-slate-900/60 p-0 sm:items-center sm:p-4">
+          <section className="flex max-h-[95vh] w-full flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:max-w-lg sm:rounded-2xl">
+            <header className="flex items-center justify-between border-b p-5">
+              <h2 className="text-xl font-black">Review your order</h2>
+              <button onClick={() => setIsCartOpen(false)} className="rounded-full bg-slate-100 p-2 text-slate-500"><X size={20} /></button>
+            </header>
+            <div className="flex-1 space-y-4 overflow-y-auto bg-slate-50 p-5">
+              {cart.map(line => (
+                <article key={line.cart_id} className="flex items-start justify-between gap-3 rounded-xl border border-slate-100 bg-white p-4">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="font-bold">{line.item.product_name}</h3>
+                    {Object.entries(line.selections).map(([group, choice]) => <p key={group} className="text-sm text-slate-500">{group}: {choice}</p>)}
+                    <div className="mt-3 flex items-center gap-3">
+                      <button aria-label={`Remove one ${line.item.product_name}`} onClick={() => updateQuantity(line.cart_id, -1)} className="rounded-md bg-slate-100 p-1.5"><Minus size={16} /></button>
+                      <span className="min-w-5 text-center font-bold">{line.quantity}</span>
+                      <button aria-label={`Add one ${line.item.product_name}`} onClick={() => updateQuantity(line.cart_id, 1)} className="rounded-md bg-slate-100 p-1.5"><Plus size={16} /></button>
+                    </div>
                   </div>
-                  <span className="font-bold text-slate-800">Rp {cartItem.finalPrice.toLocaleString('id-ID')}</span>
-                </div>
+                  <span className="whitespace-nowrap font-bold">{formatRp(line.unit_price * line.quantity)}</span>
+                </article>
               ))}
-              
-              {/* Customer Details Input */}
-              <div className="mt-4 p-4 bg-white rounded-xl shadow-sm border border-slate-100">
-                <label className="block text-sm font-bold text-slate-800 mb-2">Your Name</label>
-                <input 
-                  type="text" 
-                  placeholder="e.g. Budi" 
-                  value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
-                  className="w-full border border-slate-300 rounded-lg p-3 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                />
-              </div>
-            </div>
 
-            <div className="p-5 bg-white border-t border-slate-100">
-              <div className="flex justify-between items-end mb-4">
-                <span className="font-bold text-slate-500">Total</span>
-                <span className="font-black text-2xl text-blue-600">Rp {subtotal.toLocaleString('id-ID')}</span>
-              </div>
-              <button onClick={submitOrder} className="w-full bg-blue-600 text-white font-bold py-4 rounded-xl shadow-md text-lg flex items-center justify-center gap-2 active:scale-[0.98] transition-transform">
-                Send Order to Kitchen <ChevronRight size={20}/>
-              </button>
+              <section className="space-y-3 rounded-xl border border-slate-100 bg-white p-4">
+                <h3 className="font-bold">Your details</h3>
+                <label className="block text-sm font-semibold">Name (required)
+                  <input required maxLength={80} value={customerName} onChange={event => setCustomerName(event.target.value)} placeholder="Your name" className="mt-1 w-full rounded-lg border border-slate-300 p-3 font-normal outline-none focus:border-blue-500" />
+                </label>
+                <label className="block text-sm font-semibold">WhatsApp number (required)
+                  <input required type="tel" inputMode="tel" value={customerContact} onChange={event => setCustomerContact(event.target.value)} placeholder="08xx or +country code" className="mt-1 w-full rounded-lg border border-slate-300 p-3 font-normal outline-none focus:border-blue-500" />
+                </label>
+                <fieldset>
+                  <legend className="mb-2 text-sm font-semibold">Order type</legend>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    {orderTypes.map(({ value, label, Icon }) => (
+                      <button key={value} type="button" onClick={() => setOrderType(value)} className={`flex items-center justify-center gap-2 rounded-lg border p-3 text-sm font-bold ${orderType === value ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-600'}`}>
+                        <Icon size={16} />{label}
+                      </button>
+                    ))}
+                  </div>
+                </fieldset>
+                {orderType !== 'delivery' ? (
+                  <fieldset>
+                    <legend className="mb-2 text-sm font-semibold">Payment preference</legend>
+                    <div className="grid grid-cols-3 gap-2">
+                      {paymentOptions.map(({ value, label, Icon }) => (
+                        <button key={value} type="button" onClick={() => setPaymentMethod(value)} className={`flex flex-col items-center gap-2 rounded-lg border-2 p-3 text-xs font-bold ${paymentMethod === value ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-600'}`}>
+                          <Icon size={22} />{label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">Payment is completed with the cashier. This form does not charge your card or process QRIS.</p>
+                  </fieldset>
+                ) : <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">The store will contact you on WhatsApp to arrange delivery and payment.</p>}
+                <label className="block text-sm font-semibold">Order notes
+                  <textarea maxLength={500} value={orderNotes} onChange={event => setOrderNotes(event.target.value)} placeholder="Allergies, delivery instructions, or other requests" rows={3} className="mt-1 w-full resize-none rounded-lg border border-slate-300 p-3 font-normal outline-none focus:border-blue-500" />
+                </label>
+              </section>
+              {error && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p>}
             </div>
-          </div>
+            <footer className="border-t bg-white p-5">
+              <div className="mb-4 flex justify-between font-bold"><span>Total</span><span className="text-xl text-blue-600">{formatRp(total)}</span></div>
+              <button disabled={submitting} onClick={() => void placeOrder()} className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-4 text-lg font-bold text-white disabled:opacity-50">
+                {submitting ? 'Sending order...' : 'Place order'} <ChevronRight size={20} />
+              </button>
+            </footer>
+          </section>
         </div>
       )}
 
-      {/* ----------------- PAGE HEADER ----------------- */}
-      <header className="bg-white px-6 py-5 shadow-sm sticky top-0 z-30 flex justify-between items-center">
+      <header className="sticky top-0 z-30 flex items-center justify-between bg-white px-5 py-4 shadow-sm">
         <div>
-          <h1 className="text-2xl font-black tracking-tight text-slate-800 flex items-center gap-2">
-            <Coffee className="text-blue-600" size={24} /> TRISHA CAFE
-          </h1>
-          <p className="text-sm text-slate-500 font-medium mt-1 flex items-center gap-1">
-            <Utensils size={14}/> Table {tableNumber}
-          </p>
+          <h1 className="flex items-center gap-2 text-xl font-black"><Coffee size={23} className="text-blue-600" /> TRISHA CAFE</h1>
+          <p className="mt-1 text-sm text-slate-500">Order from your phone</p>
         </div>
+        <button onClick={() => setIsCartOpen(true)} disabled={!cart.length} aria-label={`View cart, ${itemCount} items`} className="relative rounded-xl bg-slate-800 p-3 text-white disabled:opacity-40">
+          <ShoppingBag size={21} />
+          {itemCount > 0 && <span className="absolute -right-2 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-blue-600 px-1 text-xs font-bold">{itemCount}</span>}
+        </button>
       </header>
 
-      {/* ----------------- CATEGORY TABS ----------------- */}
-      <div className="bg-white/80 backdrop-blur-md sticky top-[76px] z-20 py-3 px-6 shadow-sm border-t border-slate-100 overflow-x-auto whitespace-nowrap">
+      <nav aria-label="Menu categories" className="sticky top-[72px] z-20 overflow-x-auto border-t border-slate-100 bg-white/95 px-5 py-3 shadow-sm">
         <div className="flex gap-2">
-          {['Coffee', 'Snack', 'Retail'].map(cat => (
-            <button key={cat} onClick={() => setActiveCategory(cat)}
-              className={`px-5 py-2.5 rounded-full text-sm font-bold transition-all shadow-sm ${
-                activeCategory === cat ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 border border-slate-200'
-              }`}>
-              {cat}
+          {categories.map(category => (
+            <button key={category} onClick={() => setActiveCategory(category)} className={`whitespace-nowrap rounded-full px-5 py-2.5 text-sm font-bold ${activeCategory === category ? 'bg-slate-800 text-white' : 'border border-slate-200 bg-white text-slate-600'}`}>
+              {category}
             </button>
           ))}
         </div>
-      </div>
+      </nav>
 
-      {/* ----------------- MENU LIST ----------------- */}
-      <div className="p-6">
-        <h2 className="text-xl font-black mb-4 text-slate-800">{activeCategory}</h2>
-        <div className="flex flex-col gap-4">
-          {menuItems.filter(item => item.category === activeCategory).map((item) => (
-            <button 
-              key={item.id} 
-              onClick={() => handleProductClick(item)} 
-              className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 active:bg-slate-50 transition-colors text-left flex justify-between items-center group"
-            >
-              <div className="pr-4">
-                <h3 className="font-bold text-lg text-slate-800">{item.name}</h3>
-                <p className="text-sm text-slate-500 mt-1 line-clamp-2 leading-relaxed">{item.desc}</p>
-                {item.options && (
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-blue-500 bg-blue-50 px-2 py-0.5 rounded mt-2 inline-block border border-blue-100">
-                    Customizable
-                  </span>
-                )}
+      <section className="p-5">
+        <h2 className="mb-4 text-xl font-black">{activeCategory || 'Menu'}</h2>
+        {loading && <p className="py-12 text-center text-slate-500">Loading menu...</p>}
+        {!loading && error && menuItems.length === 0 && <p role="alert" className="rounded-xl bg-red-50 p-4 text-red-700">{error}</p>}
+        {!loading && !error && visibleItems.length === 0 && <p className="py-12 text-center text-slate-500">No items in this category right now.</p>}
+        <div className="flex flex-col gap-3">
+          {visibleItems.map(item => (
+            <button key={item.product_id} onClick={() => {
+              if (item.options?.length) {
+                setSelectedItem(item);
+                setSelections({});
+              } else {
+                addToCart(item, {});
+              }
+            }} className="flex items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm active:bg-slate-50">
+              <div className="min-w-0">
+                <h3 className="text-lg font-bold">{item.product_name}</h3>
+                {item.description && <p className="mt-1 line-clamp-2 text-sm text-slate-500">{item.description}</p>}
+                {item.options?.length ? <span className="mt-2 inline-block rounded border border-blue-100 bg-blue-50 px-2 py-0.5 text-[10px] font-bold uppercase text-blue-600">Customizable</span> : null}
               </div>
-              <div className="flex flex-col items-end gap-2 shrink-0">
-                <span className="text-blue-600 font-bold text-lg whitespace-nowrap">Rp {item.price.toLocaleString('id-ID')}</span>
-                <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 group-hover:bg-blue-600 group-hover:text-white transition-colors">
-                  <span className="font-bold text-xl leading-none mb-1">+</span>
-                </div>
+              <div className="flex shrink-0 flex-col items-end gap-2">
+                <span className="whitespace-nowrap text-lg font-bold text-blue-600">{formatRp(Number(item.price))}</span>
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-xl font-bold">+</span>
               </div>
             </button>
           ))}
         </div>
-      </div>
+      </section>
 
-      {/* ----------------- FLOATING CART BUTTON ----------------- */}
-      {cart.length > 0 && (
-        <div className="fixed bottom-6 left-0 right-0 px-6 z-40 animate-in slide-in-from-bottom-10">
-          <button 
-            onClick={() => setIsCartOpen(true)}
-            className="w-full bg-slate-800 text-white p-4 rounded-2xl shadow-2xl flex justify-between items-center active:scale-[0.98] transition-transform"
-          >
-            <div className="flex items-center gap-3">
-              <div className="bg-white/20 px-3 py-1.5 rounded-lg font-black text-sm">
-                {cart.length}
-              </div>
-              <span className="font-bold text-lg">View Order</span>
-            </div>
-            <span className="font-black text-xl">Rp {subtotal.toLocaleString('id-ID')}</span>
+      {itemCount > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 z-30 p-4">
+          <button onClick={() => setIsCartOpen(true)} className="flex w-full items-center justify-between rounded-2xl bg-slate-800 p-4 text-white shadow-2xl">
+            <span className="font-bold">{itemCount} item{itemCount === 1 ? '' : 's'} · Review order</span>
+            <span className="text-lg font-black">{formatRp(total)}</span>
           </button>
         </div>
       )}
-
-    </div>
+    </main>
   );
 }

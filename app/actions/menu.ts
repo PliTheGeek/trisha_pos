@@ -29,8 +29,62 @@ export async function listMenu() {
   return data;
 }
 
+export async function listMenuCategories() {
+  const supabase = await createSupabaseServerClient();
+  const { data, error } = await supabase.from('menu_categories').select('category_name').order('category_name');
+  if (error) throw new Error(error.message);
+  return data.map(category => category.category_name);
+}
+
+async function requireMenuCategory(supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>, categoryName: string) {
+  const { data, error } = await supabase
+    .from('menu_categories')
+    .select('category_name')
+    .eq('category_name', categoryName)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) throw new Error('Select a category from the managed category list.');
+}
+
+export async function createMenuCategory(categoryName: string) {
+  const supabase = await requireAdmin();
+  const { error } = await supabase.rpc('manage_menu_category', {
+    p_action: 'create',
+    p_category_name: categoryName,
+    p_new_name: null,
+  });
+  if (error) throw new Error(error.message);
+  revalidatePath('/');
+  revalidatePath('/manage');
+}
+
+export async function renameMenuCategory(categoryName: string, newName: string) {
+  const supabase = await requireAdmin();
+  const { error } = await supabase.rpc('manage_menu_category', {
+    p_action: 'rename',
+    p_category_name: categoryName,
+    p_new_name: newName,
+  });
+  if (error) throw new Error(error.message);
+  revalidatePath('/');
+  revalidatePath('/manage');
+}
+
+export async function deleteMenuCategory(categoryName: string) {
+  const supabase = await requireAdmin();
+  const { error } = await supabase.rpc('manage_menu_category', {
+    p_action: 'delete',
+    p_category_name: categoryName,
+    p_new_name: null,
+  });
+  if (error) throw new Error(error.message);
+  revalidatePath('/');
+  revalidatePath('/manage');
+}
+
 export async function createMenu(input: MenuInput) {
   const supabase = await requireAdmin();
+  await requireMenuCategory(supabase, input.category);
   const { data, error } = await supabase.from('menu_items').insert(input).select().single();
   if (error) throw new Error(error.message);
   revalidatePath('/');
@@ -40,6 +94,7 @@ export async function createMenu(input: MenuInput) {
 
 export async function updateMenu(id: string, input: Partial<MenuInput>) {
   const supabase = await requireAdmin();
+  if (input.category) await requireMenuCategory(supabase, input.category);
   const { data, error } = await supabase.from('menu_items').update(input).eq('product_id', id).select().single();
   if (error) throw new Error(error.message);
   revalidatePath('/');
