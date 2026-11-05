@@ -1,12 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Coffee, Croissant, Search, ShoppingBag, Trash2, User, X, Tag, Store, History, Settings, Flame, Menu, Banknote, QrCode, CreditCard, Pencil, Receipt, Plus, Minus } from 'lucide-react';
+import { Ribbon, Search, ShoppingBag, Trash2, User, X, Tag, Store, History, Settings, Flame, Menu, Banknote, QrCode, CreditCard, Pencil, Receipt, Plus, Minus, ClipboardList } from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { createTransaction } from '@/app/actions/transactions';
 import { listDiscounts } from '@/app/actions/discounts';
-import { listMenu } from '@/app/actions/menu';
+import { listMenu, listMenuCategories } from '@/app/actions/menu';
+import { getIncomingScanOrderCount } from '@/app/actions/scan-orders';
 
 // ---------------- TYPES ----------------
 type PaymentMethod = 'cash' | 'qris' | 'card';
@@ -29,19 +30,6 @@ type CartItem = {
 };
 
 // ---------------- HELPERS ----------------
-const normalizeCategory = (category: unknown) => {
-  const value = String(category ?? '').trim().toLowerCase().replace(/\s+/g, '_');
-
-  if (value === 'non-coffee' || value === 'non_coffee') return 'Non-Coffee';
-  if (value === 'snack' || value === 'snacks') return 'Snacks';
-  if (value === 'coffee') return 'Coffee';
-  if (value === 'retail') return 'Retail';
-
-  return String(category ?? 'Other').trim() || 'Other';
-};
-
-const menuCategories = ['All', 'Coffee', 'Non-Coffee', 'Snacks', 'Retail'];
-
 const formatRp = (value: number) => `Rp ${value.toLocaleString('id-ID')}`;
 
 const paymentLabels: Record<PaymentMethod, string> = { cash: 'Cash', qris: 'QRIS', card: 'Other' };
@@ -74,9 +62,11 @@ export default function PosInterface() {
   // ---------------- STATE ----------------
   const [cart, setCart] = useState<CartItem[]>([]);
   const [menuItems, setMenuItems] = useState<any[]>([]);
+  const [menuCategories, setMenuCategories] = useState<string[]>([]);
   const [isLoadingMenu, setIsLoadingMenu] = useState(true);
   const [appliedDiscounts, setAppliedDiscounts] = useState<any[]>([]);
   const [activeCategory, setActiveCategory] = useState('All');
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Order info
   const [orderName, setOrderName] = useState('');
@@ -101,20 +91,22 @@ export default function PosInterface() {
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+  const [incomingScanOrderCount, setIncomingScanOrderCount] = useState(0);
 
   useEffect(() => {
     async function getMenuItems() {
       try {
-        const [rows, discounts] = await Promise.all([listMenu(), listDiscounts()]);
+        const [rows, discounts, categories] = await Promise.all([listMenu(), listDiscounts(), listMenuCategories()]);
         const normalizedItems = rows.map((item: any, index: number) => ({
           ...item,
           id: String(item.product_id),
           menuKey: `${String(item.product_id)}-${index}`,
           name: item.product_name,
           price: Number(item.price) || 0,
-          category: normalizeCategory(item.category),
+          category: String(item.category ?? '').trim(),
         }));
         setMenuItems(normalizedItems);
+        setMenuCategories(categories);
         setAvailableDiscounts(discounts.filter((discount: any) => discount.is_active).map((discount: any) => ({
           ...discount,
           id: discount.discount_id,
@@ -125,12 +117,31 @@ export default function PosInterface() {
       } catch (error) {
         console.error('Failed to load menu:', error);
         setMenuItems([]);
+        setMenuCategories([]);
       } finally {
         setIsLoadingMenu(false);
       }
     }
 
     getMenuItems();
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const refreshCount = async () => {
+      try {
+        const count = await getIncomingScanOrderCount();
+        if (active) setIncomingScanOrderCount(count);
+      } catch (error) {
+        console.error('Failed to load incoming scan order count:', error);
+      }
+    };
+    void refreshCount();
+    const intervalId = window.setInterval(() => void refreshCount(), 15000);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
   }, []);
 
   // ---------------- MATH LOGIC ----------------
@@ -147,6 +158,13 @@ export default function PosInterface() {
     subtotal
   );
   const finalTotal = Math.round(subtotal - totalDiscountAmount);
+  const visibleMenuItems = menuItems.filter(item => {
+    const matchesCategory = activeCategory === 'All' || item.category === activeCategory;
+    const query = searchQuery.trim().toLocaleLowerCase();
+    const matchesSearch = !query || [item.name, item.category, item.description]
+      .some(value => String(value ?? '').toLocaleLowerCase().includes(query));
+    return matchesCategory && matchesSearch;
+  });
 
   // Split bill maths
   const splitPaid = splitPayments.reduce((sum, p) => sum + p.amount, 0);
@@ -402,6 +420,7 @@ export default function PosInterface() {
             <div className="p-4 flex flex-col gap-2">
               <Link href="/" className="p-3 rounded-lg bg-blue-50 text-blue-700 font-bold flex items-center gap-3"><Store size={20}/> POS</Link>
               <Link href="/history" className="p-3 rounded-lg text-slate-600 hover:bg-slate-50 font-bold flex items-center gap-3"><History size={20}/> LOGS</Link>
+              <Link href="/orders" className="p-3 rounded-lg text-slate-600 hover:bg-slate-50 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-3"><ClipboardList size={20}/> ORDERS</span>{incomingScanOrderCount > 0 && <span className="rounded-full bg-red-600 px-2 py-0.5 text-xs text-white">{incomingScanOrderCount}</span>}</Link>
               <Link href="/manage" className="p-3 rounded-lg text-slate-600 hover:bg-slate-50 font-bold flex items-center gap-3"><Settings size={20}/> EDIT</Link>
               <hr className="my-2 border-slate-100"/>
               <Link href="/kitchen" className="p-3 rounded-lg text-slate-600 hover:bg-orange-50 hover:text-orange-600 font-bold flex items-center gap-3"><Flame size={20}/> KDS</Link>
@@ -686,6 +705,7 @@ export default function PosInterface() {
             <nav className="hidden md:flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
               <Link href="/" className="px-4 py-1.5 rounded-md text-sm font-bold bg-white text-blue-600 shadow-sm">POS</Link>
               <Link href="/history" className="px-4 py-1.5 rounded-md text-sm font-bold text-slate-500 hover:text-slate-800 hover:bg-slate-200">LOGS</Link>
+              <Link href="/orders" className="flex items-center gap-1 rounded-md px-4 py-1.5 text-sm font-bold text-slate-500 hover:bg-slate-200 hover:text-slate-800">ORDERS{incomingScanOrderCount > 0 && <span className="ml-1 rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] leading-none text-white">{incomingScanOrderCount}</span>}</Link>
               <Link href="/manage" className="px-4 py-1.5 rounded-md text-sm font-bold text-slate-500 hover:text-slate-800 hover:bg-slate-200">EDIT</Link>
               <div className="w-px h-4 bg-slate-300 mx-1"></div>
               <Link href="/kitchen" className="px-4 py-1.5 rounded-md text-sm font-bold text-slate-500 hover:text-orange-600 hover:bg-orange-100 flex items-center gap-1.5"><Flame size={14} /> KDS</Link>
@@ -693,18 +713,25 @@ export default function PosInterface() {
           </div>
 
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg hidden sm:flex">
+            <label className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg">
               <Search size={18} className="text-slate-400" />
-              <input type="text" placeholder="Search menu..." className="bg-transparent border-none outline-none text-sm w-28 lg:w-36" />
-            </div>
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={event => setSearchQuery(event.target.value)}
+                placeholder="Search menu..."
+                aria-label="Search menu"
+                className="w-28 border-none bg-transparent text-sm outline-none lg:w-44"
+              />
+            </label>
           </div>
         </header>
 
         <div className="p-4 flex gap-3 overflow-x-auto bg-white">
-          {menuCategories.map(cat => (
+          {['All', ...menuCategories].map(cat => (
             <button key={cat} onClick={() => setActiveCategory(cat)}
               className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-colors border ${activeCategory === cat ? 'bg-slate-800 text-white border-slate-800 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
-              {cat === 'Coffee' ? <Coffee size={16} /> : <Croissant size={16} />} {cat}
+              <Ribbon size={16} /> {cat}
             </button>
           ))}
         </div>
@@ -714,7 +741,7 @@ export default function PosInterface() {
             <p className="mt-8 text-center text-sm text-slate-400">Loading menu...</p>
           ) : (
             <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mt-4">
-              {menuItems.filter(item => activeCategory === 'All' || item.category === activeCategory).map((item) => (
+              {visibleMenuItems.map((item) => (
                 <button key={item.menuKey} onClick={() => handleProductClick(item)} className="bg-white p-5 rounded-xl shadow-[0_2px_8px_-4px_rgba(0,0,0,0.1)] border border-slate-200 hover:border-blue-500 hover:shadow-md transition-all text-left flex flex-col h-32 justify-between">
                   <div>
                     <span className="font-bold text-lg text-slate-800 leading-tight block">{item.name}</span>
@@ -723,6 +750,7 @@ export default function PosInterface() {
                   <span className="text-blue-600 font-bold text-lg">Rp {item.price.toLocaleString('id-ID')}</span>
                 </button>
               ))}
+              {visibleMenuItems.length === 0 && <p className="col-span-full mt-8 text-center text-sm text-slate-400">No menu items match your search.</p>}
             </div>
           )}
         </div>
