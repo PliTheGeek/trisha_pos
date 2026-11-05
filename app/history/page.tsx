@@ -5,13 +5,15 @@ import { ArrowLeft, Banknote, Check, CreditCard, Download, Plus, Printer, QrCode
 import Link from 'next/link';
 import { cancelOpenBill, listTransactions, payOpenBill, type OpenBillPaymentInput } from '@/app/actions/transactions';
 
-type Period = 'daily' | 'monthly' | 'annual';
+type Period = 'daily' | 'monthly' | 'annual' | 'date';
+type PresetPeriod = Exclude<Period, 'date'>;
 type Transaction = {
   transaction_id: string;
   created_at: string;
   status: string;
   payment_method: string;
-  order_type: 'dine_in' | 'takeaway';
+  order_type: 'dine_in' | 'takeaway' | 'delivery';
+  scan_payment_preference: 'cash' | 'qris' | 'card' | null;
   subtotal: number;
   discount_total: number;
   total: number;
@@ -29,7 +31,7 @@ const paymentOptions: { method: PaymentMethod; label: string; Icon: typeof Bankn
   { method: 'card', label: 'Other', Icon: CreditCard },
 ];
 
-function periodBounds(period: Period) {
+function periodBounds(period: PresetPeriod) {
   const now = new Date();
   const start = new Date(now.getFullYear(), period === 'annual' ? 0 : period === 'monthly' ? now.getMonth() : now.getMonth(), period === 'daily' ? now.getDate() : 1);
   const end = period === 'annual'
@@ -38,6 +40,20 @@ function periodBounds(period: Period) {
       ? new Date(now.getFullYear(), now.getMonth() + 1, 1)
       : new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
   return { from: start.toISOString(), to: end.toISOString() };
+}
+
+function dateBounds(date: string) {
+  const [year, month, day] = date.split('-').map(Number);
+  const start = new Date(year, month - 1, day);
+  const end = new Date(year, month - 1, day + 1);
+  return { from: start.toISOString(), to: end.toISOString() };
+}
+
+function localDateValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function csvCell(value: string | number) {
@@ -55,15 +71,20 @@ function paymentSummary(transaction: Transaction) {
       .map(payment => `${formatPaymentMethod(payment.method)} Rp ${Number(payment.amount).toLocaleString('id-ID')}`)
       .join(' + ');
   }
+  if (transaction.payment_method.toLowerCase() === 'open_bill' && transaction.scan_payment_preference) {
+    return `OPEN BILL · PREFERS ${formatPaymentMethod(transaction.scan_payment_preference)}`;
+  }
   return formatPaymentMethod(transaction.payment_method);
 }
 
 function formatOrderType(orderType: Transaction['order_type']) {
+  if (orderType === 'delivery') return 'Delivery';
   return orderType === 'takeaway' ? 'Takeaway' : 'Dine in';
 }
 
 export default function HistoryInterface() {
   const [period, setPeriod] = useState<Period>('daily');
+  const [selectedDate, setSelectedDate] = useState(() => localDateValue(new Date()));
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [selected, setSelected] = useState<Transaction | null>(null);
   const [error, setError] = useState('');
@@ -80,11 +101,11 @@ export default function HistoryInterface() {
   const [settlementError, setSettlementError] = useState('');
   const [settling, setSettling] = useState(false);
 
-  async function load(periodToLoad = period) {
+  async function load(bounds = period === 'date' ? dateBounds(selectedDate) : periodBounds(period)) {
     setLoading(true);
     setError('');
     try {
-      setTransactions(await listTransactions({ limit: 1000, ...periodBounds(periodToLoad) }) as Transaction[]);
+      setTransactions(await listTransactions({ limit: 1000, ...bounds }) as Transaction[]);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Failed to load transactions.');
     } finally {
@@ -190,7 +211,7 @@ export default function HistoryInterface() {
 
   function exportCsv() {
     const rows = [
-      ['Transaction ID', 'Date', 'Order Name', 'Phone', 'Order Type', 'Payment', 'Status', 'Subtotal', 'Discount', 'Total', 'Items'],
+      ['Transaction ID', 'Date', 'Order Name', 'Phone', 'Order Type', 'Payment', 'Payment Preference', 'Status', 'Subtotal', 'Discount', 'Total', 'Items'],
       ...transactions.map(item => [
         item.transaction_id,
         new Date(item.created_at).toLocaleString('id-ID'),
@@ -200,6 +221,7 @@ export default function HistoryInterface() {
         item.transaction_payments?.map(payment =>
           `${formatPaymentMethod(payment.method)} Rp ${Number(payment.amount).toLocaleString('id-ID')}`
         ).join('; ') || formatPaymentMethod(item.payment_method),
+        item.scan_payment_preference ? formatPaymentMethod(item.scan_payment_preference) : '',
         item.status,
         item.subtotal,
         item.discount_total,
@@ -211,7 +233,7 @@ export default function HistoryInterface() {
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
     const link = document.createElement('a');
     link.href = url;
-    link.download = `transactions-${period}-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `transactions-${period === 'date' ? selectedDate : period}-${localDateValue(new Date())}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   }
@@ -224,9 +246,24 @@ export default function HistoryInterface() {
           <div><p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Reports</p><h1 className="text-xl font-bold">Transaction Logs</h1></div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <select value={period} onChange={event => { const next = event.target.value as Period; setPeriod(next); void load(next); }} className="border border-slate-200 bg-white px-3 py-2 text-sm font-medium outline-none shadow-sm focus:border-blue-500">
-            <option value="daily">Today</option><option value="monthly">This month</option><option value="annual">This year</option>
+          <select value={period} onChange={event => { const next = event.target.value as Period; setPeriod(next); void load(next === 'date' ? dateBounds(selectedDate) : periodBounds(next)); }} className="border border-slate-200 bg-white px-3 py-2 text-sm font-medium outline-none shadow-sm focus:border-blue-500">
+            <option value="daily">Today</option><option value="monthly">This month</option><option value="annual">This year</option><option value="date">Selected date</option>
           </select>
+          <label className="flex items-center gap-2 border border-slate-200 bg-white px-3 py-2 text-sm font-medium shadow-sm focus-within:border-blue-500">
+            <span className="text-slate-500">Date</span>
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={event => {
+                if (!event.target.value) return;
+                setSelectedDate(event.target.value);
+                setPeriod('date');
+                void load(dateBounds(event.target.value));
+              }}
+              className="min-w-0 bg-transparent outline-none"
+              aria-label="Filter transaction history by date"
+            />
+          </label>
           <button onClick={exportCsv} disabled={!transactions.length} className="inline-flex items-center gap-2 border border-slate-800 bg-slate-800 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700 disabled:opacity-40"><Download size={16} /> CSV</button>
           <button onClick={() => window.print()} className="inline-flex items-center gap-2 border border-slate-200 bg-white px-3 py-2 text-sm font-semibold shadow-sm transition hover:bg-slate-100"><Printer size={16} /> Print</button>
         </div>
@@ -241,7 +278,7 @@ export default function HistoryInterface() {
         </section>
 
         <section className="print-sales-activity overflow-hidden border border-slate-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b px-4 py-4 sm:px-5"><div><h2 className="font-bold">Sales activity</h2><p className="text-xs text-slate-400">Showing {period} records</p></div>{loading && <span className="text-sm text-slate-400">Loading...</span>}</div>
+          <div className="flex items-center justify-between border-b px-4 py-4 sm:px-5"><div><h2 className="font-bold">Sales activity</h2><p className="text-xs text-slate-400">Showing {period === 'date' ? `records for ${selectedDate}` : period} records</p></div>{loading && <span className="text-sm text-slate-400">Loading...</span>}</div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[950px] text-left text-sm">
               <thead><tr className="border-b bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><th className="px-5 py-3">Date</th><th className="px-5 py-3">Order</th><th className="px-5 py-3">Type</th><th className="px-5 py-3">Payment</th><th className="px-5 py-3">Status</th><th className="px-5 py-3 text-right">Total</th><th className="px-5 py-3 text-right">Details</th></tr></thead>
@@ -278,6 +315,7 @@ export default function HistoryInterface() {
             <p><span className="font-semibold">Order:</span> {selected.customer_name || 'Walk-in'}</p>
             {selected.customer_contact && <p><span className="font-semibold">Phone:</span> {selected.customer_contact}</p>}
             <p><span className="font-semibold">Type:</span> {formatOrderType(selected.order_type)}</p>
+            {selected.scan_payment_preference && <p><span className="font-semibold">Payment preference (at order):</span> {formatPaymentMethod(selected.scan_payment_preference)}</p>}
           </div>
           <div className="space-y-3 border-b pb-4">{selected.transaction_items.map((item, index) => <div key={`${item.product_name}-${item.order_note}-${index}`} className="flex justify-between gap-4 text-sm"><div><p>{item.quantity}x {item.product_name}</p>{item.order_note && <p className="text-xs text-slate-400">{item.order_note}</p>}</div><span className="whitespace-nowrap">Rp {Number(item.price * item.quantity).toLocaleString('id-ID')}</span></div>)}</div>
           <div className="mt-4 space-y-1 text-sm">

@@ -81,9 +81,10 @@ export async function getIncomingScanOrderCount() {
 
 export async function updateScanOrderStatus(scanOrderId: string, status: 'accepted' | 'cancelled') {
   const supabase = await authenticatedClient();
-  const { error } = await supabase.rpc('update_scan_order_status', {
+  const { data, error } = await supabase.rpc('update_scan_order_status', {
     p_scan_order_id: scanOrderId,
     p_status: status,
   });
   if (error) throw new Error(error.message);
+  return data as string | null;
 }
