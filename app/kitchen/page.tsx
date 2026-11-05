@@ -78,7 +78,7 @@ export default function KitchenInterface() {
       <header className="mb-6 flex items-center justify-between rounded-xl border bg-white p-4 shadow-sm">
         <div className="flex items-center gap-4">
           <Link href="/" className="rounded-lg bg-slate-100 p-2"><ArrowLeft size={20} /></Link>
-          <div className="flex items-center gap-2"><Coffee size={24} /><h1 className="text-xl font-bold">Kitchen Queue</h1></div>
+          <div className="flex items-center gap-2"><Coffee size={24} /><h1 className="text-xl font-bold">Order Queue</h1></div>
         </div>
         <div className="flex items-center gap-2 rounded-lg bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700">
           <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-blue-500" /> LIVE

@@ -1,13 +1,34 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Coffee, Croissant, Search, ShoppingBag, Trash2, User, X, Tag, Store, History, Settings, Flame, Menu, Banknote, QrCode, CreditCard, Pencil, Receipt } from 'lucide-react';
+import { Coffee, Croissant, Search, ShoppingBag, Trash2, User, X, Tag, Store, History, Settings, Flame, Menu, Banknote, QrCode, CreditCard, Pencil, Receipt, Plus, Minus } from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { createTransaction } from '@/app/actions/transactions';
 import { listDiscounts } from '@/app/actions/discounts';
 import { listMenu } from '@/app/actions/menu';
 
+// ---------------- TYPES ----------------
+type PaymentMethod = 'cash' | 'qris' | 'card';
+type OrderType = 'dine_in' | 'takeaway';
+
+type PaymentLine = {
+  method: PaymentMethod;
+  amount: number;       // portion of the bill covered by this payment
+  cashReceived: number; // only used for cash (0 for cashless)
+};
+
+type CartItem = {
+  cartId: string;
+  id: string;
+  name: string;
+  unitPrice: number;
+  quantity: number;
+  notes: string;     // modifiers (Oat Milk, Large, ...)
+  orderNote: string; // free-text note typed by the cashier
+};
+
+// ---------------- HELPERS ----------------
 const normalizeCategory = (category: unknown) => {
   const value = String(category ?? '').trim().toLowerCase().replace(/\s+/g, '_');
 
@@ -21,26 +42,62 @@ const normalizeCategory = (category: unknown) => {
 
 const menuCategories = ['All', 'Coffee', 'Non-Coffee', 'Snacks', 'Retail'];
 
+const formatRp = (value: number) => `Rp ${value.toLocaleString('id-ID')}`;
+
+const paymentLabels: Record<PaymentMethod, string> = { cash: 'Cash', qris: 'QRIS', card: 'Other' };
+
+const splitMethodOptions = [
+  { value: 'cash', label: 'Cash', Icon: Banknote, active: 'border-emerald-500 bg-emerald-50', iconClass: 'text-emerald-600' },
+  { value: 'qris', label: 'QRIS', Icon: QrCode, active: 'border-blue-500 bg-blue-50', iconClass: 'text-blue-600' },
+  { value: 'card', label: 'Other', Icon: CreditCard, active: 'border-blue-500 bg-blue-50', iconClass: 'text-slate-500' },
+] as const;
+
+// "0812-3456-789" -> "628123456789" | "+65 9123 4567" -> "6591234567"
+const normalizeWhatsAppNumber = (raw: string) => {
+  const trimmed = raw.trim();
+  let digits = trimmed.replace(/\D/g, '');
+  if (!digits) return '';
+  if (trimmed.startsWith('+')) return digits;          // already international
+  if (digits.startsWith('62')) return digits;
+  if (digits.startsWith('0')) return `62${digits.slice(1)}`;
+  if (digits.startsWith('8')) return `62${digits}`;
+  return digits;
+};
+
+const isValidWhatsAppNumber = (digits: string) => /^\d{9,15}$/.test(digits);
+
 export default function PosInterface() {
 
   // ---------------- DATA ----------------
   const [availableDiscounts, setAvailableDiscounts] = useState<any[]>([]);
 
   // ---------------- STATE ----------------
-  const [cart, setCart] = useState<any[]>([]); 
+  const [cart, setCart] = useState<CartItem[]>([]);
   const [menuItems, setMenuItems] = useState<any[]>([]);
   const [isLoadingMenu, setIsLoadingMenu] = useState(true);
-  const [appliedDiscounts, setAppliedDiscounts] = useState<any[]>([]); 
+  const [appliedDiscounts, setAppliedDiscounts] = useState<any[]>([]);
   const [activeCategory, setActiveCategory] = useState('All');
-  
+
+  // Order info
+  const [orderName, setOrderName] = useState('');
+  const [orderContact, setOrderContact] = useState('');
+  const [orderType, setOrderType] = useState<OrderType>('dine_in');
+
   // Modals & Drawers
-  const [selectedItem, setSelectedItem] = useState<any>(null); 
-  const [tempOptions, setTempOptions] = useState<any>({}); 
-  const [isDiscountModalOpen, setIsDiscountModalOpen] = useState(false); 
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false); 
+  const [selectedItem, setSelectedItem] = useState<any>(null);
+  const [tempOptions, setTempOptions] = useState<any>({});
+  const [isDiscountModalOpen, setIsDiscountModalOpen] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
   const [cashGiven, setCashGiven] = useState<number | ''>('');
-  
+
+  // Split bill
+  const [isSplitMode, setIsSplitMode] = useState(false);
+  const [splitPayments, setSplitPayments] = useState<PaymentLine[]>([]);
+  const [splitMethod, setSplitMethod] = useState<PaymentMethod>('cash');
+  const [splitAmount, setSplitAmount] = useState<number | ''>('');
+  const [splitCashReceived, setSplitCashReceived] = useState<number | ''>('');
+
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
@@ -76,11 +133,39 @@ export default function PosInterface() {
     getMenuItems();
   }, []);
 
+  // ---------------- MATH LOGIC ----------------
+  const subtotal = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+
+  const getDiscountAmount = (disc: any) => {
+    if (disc.type === 'flat') return disc.value;
+    if (disc.type === 'percentage') return subtotal * (disc.value / 100);
+    return 0;
+  };
+
+  const totalDiscountAmount = Math.min(
+    appliedDiscounts.reduce((sum, disc) => sum + getDiscountAmount(disc), 0),
+    subtotal
+  );
+  const finalTotal = Math.round(subtotal - totalDiscountAmount);
+
+  // Split bill maths
+  const splitPaid = splitPayments.reduce((sum, p) => sum + p.amount, 0);
+  const splitRemaining = Math.max(0, finalTotal - splitPaid);
+  const splitCashTotal = splitPayments.filter(p => p.method === 'cash').reduce((sum, p) => sum + p.amount, 0);
+  const splitCashlessTotal = splitPaid - splitCashTotal;
+  // Empty input = "the rest of the bill" / "exact cash"
+  const pendingSplitAmount = splitAmount === '' ? splitRemaining : Number(splitAmount);
+  const pendingCashReceived = splitCashReceived === '' ? pendingSplitAmount : Number(splitCashReceived);
+  const canAddSplit =
+    pendingSplitAmount > 0 &&
+    pendingSplitAmount <= splitRemaining &&
+    (splitMethod !== 'cash' || pendingCashReceived >= pendingSplitAmount);
+
   // ---------------- ACTIONS ----------------
   const handleProductClick = (item: any) => {
     if (item.options && item.options.length > 0) {
       setSelectedItem(item);
-      setTempOptions({}); 
+      setTempOptions({});
     } else addToCart(item, {});
   };
 
@@ -89,17 +174,47 @@ export default function PosInterface() {
   };
 
   const addToCart = (item: any, selectedModifiers: any) => {
-    let finalPrice = item.price;
-    let notes: string[] = [];
-    Object.values(selectedModifiers).forEach((mod: any) => {
-      finalPrice += mod.addPrice;
+    let unitPrice = item.price;
+    const notes: string[] = [];
+
+    // Walk the option groups in their defined order so identical picks always produce identical notes
+    (item.options ?? []).forEach((group: any) => {
+      const mod = selectedModifiers[group.group];
+      if (!mod) return;
+      unitPrice += mod.addPrice;
       if (mod.name !== 'Hot' && mod.name !== 'Fresh Milk') notes.push(mod.name);
     });
-    setCart([...cart, { cartId: Math.random().toString(), id: item.id, name: item.name, finalPrice, notes: notes.join(', '), orderNote: '' }]);
-    setSelectedItem(null); 
+    const notesText = notes.join(', ');
+
+    setCart(prev => {
+      // Same product + same modifiers + same price (and no custom note) => stack
+      const existing = prev.find(c =>
+        c.id === item.id && c.unitPrice === unitPrice && c.notes === notesText && !c.orderNote
+      );
+      if (existing) {
+        return prev.map(c => c.cartId === existing.cartId ? { ...c, quantity: c.quantity + 1 } : c);
+      }
+      return [...prev, {
+        cartId: Math.random().toString(),
+        id: item.id,
+        name: item.name,
+        unitPrice,
+        quantity: 1,
+        notes: notesText,
+        orderNote: '',
+      }];
+    });
+    setSelectedItem(null);
   };
 
-  const startEditingNote = (cartItem: any) => {
+  const changeQuantity = (cartId: string, delta: number) => {
+    setCart(prev => prev.map(item => item.cartId === cartId
+      ? { ...item, quantity: Math.max(1, item.quantity + delta) }
+      : item
+    ));
+  };
+
+  const startEditingNote = (cartItem: CartItem) => {
     setEditingNoteId(cartItem.cartId);
     setNoteDraft(cartItem.orderNote ?? '');
   };
@@ -129,42 +244,150 @@ export default function PosInterface() {
     setAppliedDiscounts(appliedDiscounts.filter(d => d.id !== discountId));
   };
 
-  const submitOrder = async (paymentMethod: string) => {
+  // ---------------- SPLIT BILL ACTIONS ----------------
+  const resetSplit = () => {
+    setSplitPayments([]);
+    setSplitAmount('');
+    setSplitCashReceived('');
+    setSplitMethod('cash');
+  };
+
+  const toggleSplitMode = () => {
+    setIsSplitMode(prev => !prev);
+    setCashGiven('');
+    resetSplit();
+  };
+
+  const addSplitPayment = () => {
+    if (!canAddSplit) return;
+    setSplitPayments(prev => [...prev, {
+      method: splitMethod,
+      amount: pendingSplitAmount,
+      cashReceived: splitMethod === 'cash' ? pendingCashReceived : 0,
+    }]);
+    setSplitAmount('');
+    setSplitCashReceived('');
+  };
+
+  const removeSplitPayment = (index: number) => {
+    setSplitPayments(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const closeCheckout = () => {
+    setIsCheckoutModalOpen(false);
+    setCashGiven('');
+    setIsSplitMode(false);
+    resetSplit();
+  };
+
+  // ---------------- WHATSAPP RECEIPT ----------------
+  const buildReceipt = (payments: PaymentLine[], isOpenBill: boolean) => {
+    const divider = '--------------------------';
+    const date = new Date().toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' });
+
+    const itemLines = cart.flatMap(item => [
+      `${item.quantity}x ${item.name} - ${formatRp(item.unitPrice * item.quantity)}`,
+      ...(item.notes ? [`   + ${item.notes}`] : []),
+      ...(item.orderNote ? [`   Note: ${item.orderNote}`] : []),
+    ]);
+
+    const discountLines = appliedDiscounts.map(d => `${d.name}: -${formatRp(getDiscountAmount(d))}`);
+
+    const paymentLines = isOpenBill
+      ? ['*OPEN BILL* - payment pending']
+      : [
+          ...payments.map(p => {
+            const base = `${paymentLabels[p.method]}: ${formatRp(p.amount)}`;
+            if (p.method !== 'cash' || p.cashReceived <= p.amount) return base;
+            return `${base} (received ${formatRp(p.cashReceived)}, change ${formatRp(p.cashReceived - p.amount)})`;
+          }),
+          ...(payments.length > 1 ? ['_Split bill_'] : []),
+        ];
+
+    return [
+      '*TRISHA CAFE*',
+      date,
+      ...(orderName.trim() ? [`Order: ${orderName.trim()}`] : []),
+      `Type: ${orderType === 'dine_in' ? 'Dine in' : 'Takeaway'}`,
+      divider,
+      ...itemLines,
+      divider,
+      `Subtotal: ${formatRp(subtotal)}`,
+      ...discountLines,
+      `*Total: ${formatRp(finalTotal)}*`,
+      divider,
+      ...paymentLines,
+      '',
+      'Thank you for visiting!',
+    ].join('\n');
+  };
+
+  // ---------------- SUBMIT ----------------
+  // Every payment path (QRIS / Other / Cash / Open Bill / Split) ends up here.
+  const processOrder = async (payments: PaymentLine[], isOpenBill = false) => {
+    const contact = normalizeWhatsAppNumber(orderContact);
+
+    if (orderContact.trim() && !isValidWhatsAppNumber(contact)) {
+      alert('The WhatsApp number looks invalid. Please check it or clear the field.');
+      return;
+    }
+    if (isOpenBill && !orderName.trim()) {
+      alert('Please enter an order name so the open bill can be found later.');
+      return;
+    }
+
+    const receiptText = buildReceipt(payments, isOpenBill);
+
+    // Open the tab now (inside the click) so the browser doesn't block it as a popup after the await.
+    const waWindow = contact ? window.open('', '_blank') : null;
+
     setIsSubmittingOrder(true);
 
     try {
       await createTransaction({
-        payment_method: paymentMethod === 'QRIS' ? 'qris' : paymentMethod === 'Cash' ? 'cash' : paymentMethod === 'Open Bill' ? 'open_bill' : 'card',
-        status: paymentMethod === 'Open Bill' ? 'pending' : 'paid',
-        cash_received: paymentMethod === 'Cash' ? Number(cashGiven || 0) : 0,
+        payment_method: isOpenBill ? 'open_bill' : payments.length > 1 ? 'split' : payments[0].method,
+        status: isOpenBill ? 'pending' : 'paid',
+        cash_received: payments.reduce((sum, p) => sum + p.cashReceived, 0),
+        customer_name: orderName.trim() || null,
+        customer_contact: contact || null,
+        order_type: orderType,
+        payments: payments.map(p => ({
+          method: p.method,
+          amount: p.amount,
+          cash_received: p.cashReceived,
+        })),
         discount_ids: appliedDiscounts.map(discount => discount.id),
         items: cart.map(item => ({
           product_id: item.id,
-          quantity: 1,
+          quantity: item.quantity,
           order_note: [item.notes, item.orderNote].filter(Boolean).join(', '),
         })),
       });
-      alert(`Order saved to Supabase. Paid via ${paymentMethod}.`);
+
+      if (waWindow) {
+        waWindow.location.href = `https://wa.me/${contact}?text=${encodeURIComponent(receiptText)}`;
+      }
+
+      const label = isOpenBill
+        ? 'Open Bill'
+        : payments.length > 1
+          ? `Split (${payments.map(p => paymentLabels[p.method]).join(' + ')})`
+          : paymentLabels[payments[0].method];
+      alert(`Order saved to Supabase. Paid via ${label}.`);
+
       setCart([]);
       setAppliedDiscounts([]);
-      setIsCheckoutModalOpen(false);
-      setCashGiven('');
+      setOrderName('');
+      setOrderContact('');
+      setOrderType('dine_in');
+      closeCheckout();
     } catch (error) {
+      waWindow?.close();
       alert(error instanceof Error ? error.message : 'Failed to save order.');
     } finally {
       setIsSubmittingOrder(false);
     }
   };
-
-  // ---------------- MATH LOGIC ----------------
-  const subtotal = cart.reduce((sum, item) => sum + item.finalPrice, 0);
-  let totalDiscountAmount = 0;
-  appliedDiscounts.forEach(disc => {
-    if (disc.type === 'flat') totalDiscountAmount += disc.value;
-    else if (disc.type === 'percentage') totalDiscountAmount += (subtotal * (disc.value / 100));
-  });
-  if (totalDiscountAmount > subtotal) totalDiscountAmount = subtotal;
-  const finalTotal = subtotal - totalDiscountAmount;
 
   return (
     <div className="flex flex-col md:flex-row h-screen bg-slate-50 text-slate-800 relative">
@@ -256,30 +479,145 @@ export default function PosInterface() {
 
       {isCheckoutModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[95vh]">
             <div className="p-6 text-center border-b border-slate-100 bg-slate-50">
               <h2 className="text-slate-500 font-bold tracking-widest text-sm mb-1 uppercase">Total Amount Due</h2>
               <h1 className="text-5xl font-black text-blue-600 tracking-tight">Rp {finalTotal.toLocaleString('id-ID')}</h1>
+              {(orderName.trim() || orderContact.trim()) && (
+                <p className="text-xs text-slate-500 mt-2">
+                  {orderName.trim()}{orderName.trim() && orderContact.trim() && ' • '}{orderContact.trim() && `Receipt → WhatsApp ${orderContact.trim()}`}
+                </p>
+              )}
             </div>
-            <div className="p-6 flex flex-col gap-6">
+            <div className="p-6 flex flex-col gap-6 overflow-y-auto">
               <div>
-                <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider mb-3">Select Payment Method</h3>
-                <div className="grid grid-cols-3 gap-3">
-                  <button disabled={isSubmittingOrder} onClick={() => submitOrder('QRIS')} className="flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 border-slate-200 hover:border-blue-500 hover:bg-blue-50 transition-colors text-slate-700 disabled:opacity-50">
-                    <QrCode size={28} className="text-blue-600" /><span className="font-bold">QRIS</span>
-                  </button>
-                  <button disabled={isSubmittingOrder} onClick={() => submitOrder('Other')} className="flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 border-slate-200 hover:border-blue-500 hover:bg-blue-50 transition-colors text-slate-700 disabled:opacity-50">
-                    <CreditCard size={28} className="text-slate-500" /><span className="font-bold text-sm">Other</span>
-                  </button>
-                  <button onClick={() => setCashGiven(finalTotal)} className="flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 border-slate-200 hover:border-emerald-500 hover:bg-emerald-50 transition-colors text-slate-700">
-                    <Banknote size={28} className="text-emerald-600" /><span className="font-bold">Cash</span>
+                <div className="flex justify-between items-center mb-3">
+                  <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Select Payment Method</h3>
+                  <button
+                    disabled={isSubmittingOrder}
+                    onClick={toggleSplitMode}
+                    className={`px-3 py-1 rounded-full text-xs font-bold border transition-colors disabled:opacity-50 ${isSplitMode ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+                  >
+                    Split Bill
                   </button>
                 </div>
-                <button disabled={isSubmittingOrder} onClick={() => submitOrder('Open Bill')} className="w-full mt-3 flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 transition-colors font-bold disabled:opacity-50">
-                  <Receipt size={20} /> Open Bill
-                </button>
+
+                {!isSplitMode ? (
+                  <>
+                    <div className="grid grid-cols-3 gap-3">
+                      <button disabled={isSubmittingOrder} onClick={() => processOrder([{ method: 'qris', amount: finalTotal, cashReceived: 0 }])} className="flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 border-slate-200 hover:border-blue-500 hover:bg-blue-50 transition-colors text-slate-700 disabled:opacity-50">
+                        <QrCode size={28} className="text-blue-600" /><span className="font-bold">QRIS</span>
+                      </button>
+                      <button disabled={isSubmittingOrder} onClick={() => processOrder([{ method: 'card', amount: finalTotal, cashReceived: 0 }])} className="flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 border-slate-200 hover:border-blue-500 hover:bg-blue-50 transition-colors text-slate-700 disabled:opacity-50">
+                        <CreditCard size={28} className="text-slate-500" /><span className="font-bold text-sm">Other</span>
+                      </button>
+                      <button onClick={() => setCashGiven(finalTotal)} className="flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 border-slate-200 hover:border-emerald-500 hover:bg-emerald-50 transition-colors text-slate-700">
+                        <Banknote size={28} className="text-emerald-600" /><span className="font-bold">Cash</span>
+                      </button>
+                    </div>
+                    <button disabled={isSubmittingOrder} onClick={() => processOrder([], true)} className="w-full mt-3 flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 transition-colors font-bold disabled:opacity-50">
+                      <Receipt size={20} /> Open Bill
+                    </button>
+                  </>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    {/* Method for the next portion */}
+                    <div className="grid grid-cols-3 gap-3">
+                      {splitMethodOptions.map(({ value, label, Icon, active, iconClass }) => (
+                        <button
+                          key={value}
+                          disabled={isSubmittingOrder}
+                          onClick={() => setSplitMethod(value)}
+                          className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-colors text-slate-700 disabled:opacity-50 ${splitMethod === value ? active : 'border-slate-200 hover:border-slate-300'}`}
+                        >
+                          <Icon size={28} className={iconClass} /><span className="font-bold text-sm">{label}</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Amount for this portion */}
+                    {splitRemaining > 0 && (
+                      <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">
+                          Amount ({splitMethod === 'cash' ? 'Cash' : 'Cashless'})
+                        </label>
+                        <input
+                          type="number"
+                          value={splitAmount}
+                          placeholder={String(splitRemaining)}
+                          onChange={(e) => setSplitAmount(e.target.value === '' ? '' : Number(e.target.value))}
+                          className="w-full text-2xl font-bold bg-white border border-slate-300 rounded-lg p-3 outline-none focus:border-blue-500 mb-3"
+                        />
+                        {splitMethod === 'cash' && (
+                          <>
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Cash Received</label>
+                            <input
+                              type="number"
+                              value={splitCashReceived}
+                              placeholder={String(pendingSplitAmount)}
+                              onChange={(e) => setSplitCashReceived(e.target.value === '' ? '' : Number(e.target.value))}
+                              className="w-full text-2xl font-bold bg-white border border-slate-300 rounded-lg p-3 outline-none focus:border-emerald-500 mb-3"
+                            />
+                            <div className="flex justify-between items-center text-lg mb-1">
+                              <span className="font-bold text-slate-600">Change Due:</span>
+                              <span className={`font-black ${pendingCashReceived >= pendingSplitAmount ? 'text-emerald-600' : 'text-red-500'}`}>
+                                Rp {Math.max(0, pendingCashReceived - pendingSplitAmount).toLocaleString('id-ID')}
+                              </span>
+                            </div>
+                          </>
+                        )}
+                        <button
+                          disabled={!canAddSplit || isSubmittingOrder}
+                          onClick={addSplitPayment}
+                          className="w-full mt-3 bg-slate-800 disabled:bg-slate-300 text-white font-bold py-3 rounded-lg flex justify-center items-center gap-2"
+                        >
+                          <Plus size={16} /> Add Payment
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Payments already added */}
+                    {splitPayments.length > 0 && (
+                      <div className="flex flex-col gap-2">
+                        {splitPayments.map((p, index) => (
+                          <div key={index} className="flex justify-between items-center bg-white p-3 rounded-lg border border-slate-200">
+                            <div className="flex items-center gap-2">
+                              <button disabled={isSubmittingOrder} onClick={() => removeSplitPayment(index)} className="text-slate-300 hover:text-red-500"><X size={16} /></button>
+                              <div>
+                                <p className="font-bold text-slate-800 text-sm">{paymentLabels[p.method]}</p>
+                                <p className="text-xs text-slate-400 uppercase tracking-wide">{p.method === 'cash' ? 'Cash' : 'Cashless'}</p>
+                              </div>
+                            </div>
+                            <span className="font-bold text-slate-800">Rp {p.amount.toLocaleString('id-ID')}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Summary */}
+                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-sm">
+                      <div className="flex justify-between text-slate-600 mb-1"><span>Cash</span><span>Rp {splitCashTotal.toLocaleString('id-ID')}</span></div>
+                      <div className="flex justify-between text-slate-600 mb-2"><span>Cashless</span><span>Rp {splitCashlessTotal.toLocaleString('id-ID')}</span></div>
+                      <div className="flex justify-between items-center text-lg pt-2 border-t border-slate-200">
+                        <span className="font-bold text-slate-600">Remaining:</span>
+                        <span className={`font-black ${splitRemaining === 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                          Rp {splitRemaining.toLocaleString('id-ID')}
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      disabled={splitRemaining > 0 || splitPayments.length === 0 || isSubmittingOrder}
+                      onClick={() => processOrder(splitPayments)}
+                      className="w-full bg-emerald-600 disabled:bg-slate-300 text-white font-bold py-3 rounded-lg"
+                    >
+                      {isSubmittingOrder ? 'Saving...' : 'Confirm Payment'}
+                    </button>
+                  </div>
+                )}
               </div>
-              {cashGiven !== '' && (
+
+              {!isSplitMode && cashGiven !== '' && (
                 <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
                   <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Cash Received</label>
                   <input type="number" value={cashGiven} onChange={(e) => setCashGiven(Number(e.target.value))} className="w-full text-2xl font-bold bg-white border border-slate-300 rounded-lg p-3 outline-none focus:border-emerald-500 mb-3" />
@@ -289,12 +627,18 @@ export default function PosInterface() {
                       Rp {Math.max(0, Number(cashGiven) - finalTotal).toLocaleString('id-ID')}
                     </span>
                   </div>
-                  <button disabled={Number(cashGiven) < finalTotal || isSubmittingOrder} onClick={() => submitOrder('Cash')} className="w-full mt-4 bg-emerald-600 disabled:bg-slate-300 text-white font-bold py-3 rounded-lg">{isSubmittingOrder ? 'Saving...' : 'Confirm Payment'}</button>
+                  <button
+                    disabled={Number(cashGiven) < finalTotal || isSubmittingOrder}
+                    onClick={() => processOrder([{ method: 'cash', amount: finalTotal, cashReceived: Number(cashGiven) }])}
+                    className="w-full mt-4 bg-emerald-600 disabled:bg-slate-300 text-white font-bold py-3 rounded-lg"
+                  >
+                    {isSubmittingOrder ? 'Saving...' : 'Confirm Payment'}
+                  </button>
                 </div>
               )}
             </div>
             <div className="p-4 border-t border-slate-100">
-              <button onClick={() => {setIsCheckoutModalOpen(false); setCashGiven('');}} className="w-full bg-slate-100 text-slate-600 font-bold py-3 rounded-xl hover:bg-slate-200">Cancel</button>
+              <button onClick={closeCheckout} className="w-full bg-slate-100 text-slate-600 font-bold py-3 rounded-xl hover:bg-slate-200">Cancel</button>
             </div>
           </div>
         </div>
@@ -394,6 +738,40 @@ export default function PosInterface() {
           <span className="bg-blue-100 text-blue-700 text-xs font-bold px-2 py-1 rounded">New Ticket</span>
         </div>
 
+        {/* Order name & contact */}
+        <div className="p-3 border-b border-slate-100 bg-white grid grid-cols-2 gap-2">
+          <input
+            type="text"
+            value={orderName}
+            onChange={(e) => setOrderName(e.target.value)}
+            placeholder="Order name"
+            className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500 min-w-0"
+          />
+          <input
+            type="tel"
+            inputMode="tel"
+            value={orderContact}
+            onChange={(e) => setOrderContact(e.target.value)}
+            placeholder="WhatsApp (08xx...)"
+            className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500 min-w-0"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-2 border-b border-slate-100 bg-white p-3 pt-0">
+          {([
+            { value: 'dine_in', label: 'Dine in' },
+            { value: 'takeaway', label: 'Takeaway' },
+          ] as const).map(option => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => setOrderType(option.value)}
+              className={`rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${orderType === option.value ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+
         <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 bg-slate-50/50">
           {cart.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-2">
@@ -406,14 +784,31 @@ export default function PosInterface() {
                 <div className="flex-1 pr-2">
                   <h4 className="font-bold text-slate-800">{cartItem.name}</h4>
                   {cartItem.notes && <p className="text-blue-600 font-medium text-xs mt-1 bg-blue-50 border border-blue-100 inline-block px-1.5 py-0.5 rounded">+ {cartItem.notes}</p>}
-                    {cartItem.orderNote && <p className="text-slate-500 text-xs mt-1 italic">Note: {cartItem.orderNote}</p>}
+                  {cartItem.orderNote && <p className="text-slate-500 text-xs mt-1 italic">Note: {cartItem.orderNote}</p>}
+                  <div className="flex items-center gap-2 mt-2">
+                    <button
+                      onClick={() => changeQuantity(cartItem.cartId, -1)}
+                      disabled={cartItem.quantity <= 1}
+                      className="p-1 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-md disabled:opacity-40"
+                      title="Decrease quantity"
+                    ><Minus size={14} /></button>
+                    <span className="min-w-[1.5rem] text-center font-bold text-sm text-slate-800">{cartItem.quantity}</span>
+                    <button
+                      onClick={() => changeQuantity(cartItem.cartId, 1)}
+                      className="p-1 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-md"
+                      title="Increase quantity"
+                    ><Plus size={14} /></button>
+                    {cartItem.quantity > 1 && (
+                      <span className="text-xs text-slate-400">@ Rp {cartItem.unitPrice.toLocaleString('id-ID')}</span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex flex-col items-end gap-2">
-                  <span className="font-bold text-slate-800">Rp {cartItem.finalPrice.toLocaleString('id-ID')}</span>
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => startEditingNote(cartItem)} className="text-slate-300 hover:text-blue-500" title="Add item note"><Pencil size={16} /></button>
-                      <button onClick={() => removeFromCart(cartItem.cartId)} className="text-slate-300 hover:text-red-500" title="Remove item"><Trash2 size={16} /></button>
-                    </div>
+                  <span className="font-bold text-slate-800">Rp {(cartItem.unitPrice * cartItem.quantity).toLocaleString('id-ID')}</span>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => startEditingNote(cartItem)} className="text-slate-300 hover:text-blue-500" title="Add item note"><Pencil size={16} /></button>
+                    <button onClick={() => removeFromCart(cartItem.cartId)} className="text-slate-300 hover:text-red-500" title="Remove item"><Trash2 size={16} /></button>
+                  </div>
                 </div>
               </div>
             ))
@@ -434,7 +829,7 @@ export default function PosInterface() {
                     <button onClick={() => removeDiscount(disc.id)} className="text-slate-400 hover:text-red-500"><X size={14}/></button>
                     <span>{disc.name} {disc.type === 'percentage' && `(${disc.value}%)`}</span>
                   </div>
-                  <span className="text-emerald-600 font-medium">- Rp {(disc.type === 'percentage' ? (subtotal * (disc.value/100)) : disc.value).toLocaleString('id-ID')}</span>
+                  <span className="text-emerald-600 font-medium">- Rp {getDiscountAmount(disc).toLocaleString('id-ID')}</span>
                 </div>
               ))}
             </div>
