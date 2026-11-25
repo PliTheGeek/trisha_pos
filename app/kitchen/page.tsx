@@ -82,13 +82,8 @@ export default function KitchenInterface() {
     <div className="flex min-h-screen flex-col bg-slate-50 p-6 text-slate-800">
       <header className="mb-6 flex items-center justify-between rounded-xl border bg-white p-4 shadow-sm">
         <div className="flex items-center gap-4">
-          <Link href="/" className="rounded-lg bg-slate-100 p-2 hover:bg-slate-200 transition-colors">
-            <ArrowLeft size={20} />
-          </Link>
-          <div className="flex items-center gap-2">
-            <Coffee size={24} />
-            <h1 className="text-xl font-bold">ODS Queue</h1>
-          </div>
+          <Link href="/" className="rounded-lg bg-slate-100 p-2"><ArrowLeft size={20} /></Link>
+          <div className="flex items-center gap-2"><Coffee size={24} /><h1 className="text-xl font-bold">Order Queue</h1></div>
         </div>
         <div className="flex items-center gap-2">
           <span

@@ -8,6 +8,7 @@ export async function proxy(request: NextRequest) {
   const response = await updateSupabaseSession(request);
   if (
     request.nextUrl.pathname === '/login'
+    || request.nextUrl.pathname === '/scan'
     || request.nextUrl.pathname === '/manifest.webmanifest'
     || request.nextUrl.pathname.startsWith('/api/')
   ) return response;

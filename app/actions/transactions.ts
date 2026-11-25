@@ -8,14 +8,25 @@ type TransactionItemInput = {
   order_note?: string;
 };
 
+type TransactionPaymentInput = {
+  method: 'cash' | 'qris' | 'card';
+  amount: number;
+  cash_received: number;
+};
+
+export type OpenBillPaymentInput = TransactionPaymentInput;
+
 export async function createTransaction(input: {
-  payment_method: 'cash' | 'qris' | 'card' | 'open_bill';
+  payment_method: 'cash' | 'qris' | 'card' | 'split' | 'open_bill';
   items: TransactionItemInput[];
   discount_ids?: string[];
   cash_received?: number;
   status?: 'pending' | 'paid' | 'voided';
   notes?: string;
-  contact_id?: string | null;
+  customer_name?: string | null;
+  customer_contact?: string | null;
+  order_type?: 'dine_in' | 'takeaway';
+  payments?: TransactionPaymentInput[];
 }) {
   const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -32,6 +43,15 @@ export async function createTransaction(input: {
   if (input.contact_id) rpcParams.p_contact_id = input.contact_id;
   const { data, error } = await supabase.rpc('create_pos_transaction', rpcParams);
   if (error) throw new Error(error.message);
+
+  const { error: detailsError } = await supabase.rpc('record_pos_transaction_details', {
+    p_transaction_id: data,
+    p_customer_name: input.customer_name ?? null,
+    p_customer_contact: input.customer_contact ?? null,
+    p_order_type: input.order_type ?? 'dine_in',
+    p_payments: input.payments ?? [],
+  });
+  if (detailsError) throw new Error(detailsError.message);
 
   const productIds = input.items.map(item => item.product_id);
   const { data: menuItems, error: menuError } = await supabase
@@ -74,7 +94,7 @@ export async function listTransactions(options?: {
   if (!user) throw new Error('Authentication required');
   let query = supabase
     .from('transactions')
-    .select('*, transaction_items(*), transaction_discounts(*), contacts(name, phone)')
+    .select('*, transaction_items(*), transaction_discounts(*), transaction_payments(*)')
     .order('created_at', { ascending: false })
     .limit(options?.limit ?? 1000);
   if (options?.from) query = query.gte('created_at', options.from);
@@ -84,7 +104,19 @@ export async function listTransactions(options?: {
   return data;
 }
 
-export async function closeOpenBill(transactionId: string, paymentMethod?: string) {
+export async function payOpenBill(transactionId: string, payments: OpenBillPaymentInput[]) {
+  const supabase = await createSupabaseServerClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Authentication required');
+
+  const { error } = await supabase.rpc('settle_pos_open_bill', {
+    p_transaction_id: transactionId,
+    p_payments: payments,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function cancelOpenBill(transactionId: string) {
   const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Authentication required');
@@ -96,27 +128,12 @@ export async function closeOpenBill(transactionId: string, paymentMethod?: strin
 
   const { data, error } = await supabase
     .from('transactions')
-    .update(updatePayload)
+    .update({ status: 'voided' })
     .eq('transaction_id', transactionId)
     .eq('cashier_id', user.id)
     .eq('payment_method', 'open_bill')
     .eq('status', 'pending')
-    .select('*, transaction_items(*), transaction_discounts(*), contacts(name, phone)')
-    .single();
-
-  if (error) throw new Error(error.message);
-  return data;
-}
-
-export async function getTransactionReceipt(transactionId: string) {
-  const supabase = await createSupabaseServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error('Authentication required');
-
-  const { data, error } = await supabase
-    .from('transactions')
-    .select('*, transaction_items(*), transaction_discounts(*), contacts(name, phone)')
-    .eq('transaction_id', transactionId)
+    .select('transaction_id, status')
     .single();
 
   if (error) throw new Error(error.message);
