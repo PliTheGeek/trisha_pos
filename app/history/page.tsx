@@ -238,6 +238,15 @@ export default function HistoryInterface() {
     URL.revokeObjectURL(url);
   }
 
+  function handleSendWhatsApp(tx: Transaction) {
+    const phone = tx.contacts?.phone;
+    if (!phone) {
+      alert('Transaksi ini tidak memiliki nomor kontak. Tambahkan kontak saat membuat order.');
+      return;
+    }
+    sendWhatsApp(phone, formatReceiptText(tx));
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 p-4 text-slate-800 sm:p-6">
       <header className="mx-auto mb-6 flex max-w-7xl flex-wrap items-center justify-between gap-4">

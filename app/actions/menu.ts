@@ -104,8 +104,16 @@ export async function updateMenu(id: string, input: Partial<MenuInput>) {
 
 export async function deleteMenu(id: string) {
   const supabase = await requireAdmin();
-  const { error } = await supabase.from('menu_items').update({ is_active: false }).eq('product_id', id);
-  if (error) throw new Error(error.message);
+  const { error } = await supabase.from('menu_items').delete().eq('product_id', id);
+  if (error) {
+    // If FK constraint prevents hard delete, fall back to soft-delete
+    if (error.code === '23503') {
+      const { error: softError } = await supabase.from('menu_items').update({ is_active: false }).eq('product_id', id);
+      if (softError) throw new Error(softError.message);
+    } else {
+      throw new Error(error.message);
+    }
+  }
   revalidatePath('/');
   revalidatePath('/manage');
 }

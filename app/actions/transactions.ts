@@ -32,14 +32,16 @@ export async function createTransaction(input: {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Authentication required');
 
-  const { data, error } = await supabase.rpc('create_pos_transaction', {
+  const rpcParams: Record<string, unknown> = {
     p_payment_method: input.payment_method,
     p_items: input.items,
     p_discount_ids: input.discount_ids ?? [],
     p_cash_received: input.cash_received ?? 0,
     p_status: input.status ?? 'paid',
     p_notes: input.notes ?? '',
-  });
+  };
+  if (input.contact_id) rpcParams.p_contact_id = input.contact_id;
+  const { data, error } = await supabase.rpc('create_pos_transaction', rpcParams);
   if (error) throw new Error(error.message);
 
   const { error: detailsError } = await supabase.rpc('record_pos_transaction_details', {
@@ -118,6 +120,11 @@ export async function cancelOpenBill(transactionId: string) {
   const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Authentication required');
+
+  const updatePayload: Record<string, string> = { status: 'paid' };
+  if (paymentMethod && paymentMethod !== 'open_bill') {
+    updatePayload.payment_method = paymentMethod;
+  }
 
   const { data, error } = await supabase
     .from('transactions')

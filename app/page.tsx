@@ -54,10 +54,54 @@ const normalizeWhatsAppNumber = (raw: string) => {
 
 const isValidWhatsAppNumber = (digits: string) => /^\d{9,15}$/.test(digits);
 
+function formatReceiptText(cart: any[], subtotal: number, totalDiscountAmount: number, finalTotal: number, appliedDiscounts: any[], paymentMethod: string, cashGiven: number | '', contactName?: string) {
+  const date = new Date().toLocaleString('id-ID');
+  const lines: string[] = [
+    '================================',
+    '       *TRISHA COFFEA*',
+    '================================',
+    `Tanggal : ${date}`,
+    `Bayar   : ${paymentMethod}`,
+  ];
+  if (contactName) lines.push(`Pelanggan: ${contactName}`);
+  lines.push('--------------------------------');
+  cart.forEach(item => {
+    lines.push(`1x ${item.name}`);
+    lines.push(`   Rp ${item.finalPrice.toLocaleString('id-ID')}`);
+    const note = [item.notes, item.orderNote].filter(Boolean).join(', ');
+    if (note) lines.push(`   Note: ${note}`);
+  });
+  lines.push('--------------------------------');
+  lines.push(`Subtotal : Rp ${subtotal.toLocaleString('id-ID')}`);
+  if (totalDiscountAmount > 0) {
+    lines.push(`Diskon   : -Rp ${totalDiscountAmount.toLocaleString('id-ID')}`);
+  }
+  lines.push(`*TOTAL   : Rp ${finalTotal.toLocaleString('id-ID')}*`);
+  if (paymentMethod === 'Cash' && cashGiven !== '' && Number(cashGiven) > 0) {
+    lines.push(`Tunai    : Rp ${Number(cashGiven).toLocaleString('id-ID')}`);
+    lines.push(`Kembali  : Rp ${Math.max(0, Number(cashGiven) - finalTotal).toLocaleString('id-ID')}`);
+  }
+  lines.push('================================');
+  lines.push('  Terima kasih sudah berkunjung!');
+  lines.push('        *Trisha Coffea*');
+  lines.push('================================');
+  return lines.join('\n');
+}
+
+function sendWhatsApp(phone: string, text: string) {
+  let normalized = phone.replace(/\D/g, '');
+  if (normalized.startsWith('0')) normalized = '62' + normalized.slice(1);
+  else if (!normalized.startsWith('62')) normalized = '62' + normalized;
+  const url = `https://wa.me/${normalized}?text=${encodeURIComponent(text)}`;
+  window.open(url, '_blank');
+}
+
 export default function PosInterface() {
 
   // ---------------- DATA ----------------
   const [availableDiscounts, setAvailableDiscounts] = useState<any[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [queueCount, setQueueCount] = useState(0);
 
   // ---------------- STATE ----------------
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -123,7 +167,7 @@ export default function PosInterface() {
       }
     }
 
-    getMenuItems();
+    void getMenuItems();
   }, []);
 
   useEffect(() => {
@@ -375,6 +419,7 @@ export default function PosInterface() {
           cash_received: p.cashReceived,
         })),
         discount_ids: appliedDiscounts.map(discount => discount.id),
+        contact_id: selectedContactId,
         items: cart.map(item => ({
           product_id: item.id,
           quantity: item.quantity,
@@ -409,7 +454,7 @@ export default function PosInterface() {
 
   return (
     <div className="flex flex-col md:flex-row h-screen bg-slate-50 text-slate-800 relative">
-      
+
       {/* MOBILE DRAWER */}
       {isMobileMenuOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 md:hidden flex" onClick={() => setIsMobileMenuOpen(false)}>
@@ -469,7 +514,7 @@ export default function PosInterface() {
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden flex flex-col">
             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h2 className="text-xl font-bold flex items-center gap-2"><Tag size={20}/> Apply Discount</h2>
+              <h2 className="text-xl font-bold flex items-center gap-2"><Tag size={20} /> Apply Discount</h2>
               <button onClick={() => setIsDiscountModalOpen(false)} className="p-2 bg-slate-200 hover:bg-slate-300 rounded-full"><X size={20} /></button>
             </div>
             <div className="p-4 flex flex-col gap-3">
@@ -486,11 +531,54 @@ export default function PosInterface() {
                       {disc.type === 'percentage' ? `${disc.value}%` : `-Rp ${disc.value.toLocaleString('id-ID')}`}
                     </span>
                   </button>
-                )
+                );
               })}
             </div>
             <div className="p-4 border-t border-slate-100 bg-slate-50">
               <button onClick={() => setIsDiscountModalOpen(false)} className="w-full bg-slate-800 text-white font-bold py-3 rounded-xl hover:bg-slate-900">Done</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CONTACT MODAL */}
+      {isContactModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <h2 className="text-xl font-bold flex items-center gap-2"><Phone size={20} /> Select Contact</h2>
+              <button onClick={() => setIsContactModalOpen(false)} className="p-2 bg-slate-200 hover:bg-slate-300 rounded-full"><X size={20} /></button>
+            </div>
+            <div className="p-4 flex flex-col gap-2 overflow-y-auto flex-1">
+              <button onClick={() => { setSelectedContactId(null); setIsContactModalOpen(false); }}
+                className={`flex items-center gap-3 p-3 rounded-lg border-2 transition-all text-left ${!selectedContactId ? 'border-blue-600 bg-blue-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                <User size={18} className="text-slate-400" />
+                <span className="font-medium text-slate-600">No contact (walk-in)</span>
+              </button>
+              {contacts.map(contact => {
+                const isSelected = selectedContactId === contact.contact_id;
+                return (
+                  <button key={contact.contact_id} onClick={() => { setSelectedContactId(contact.contact_id); setIsContactModalOpen(false); }}
+                    className={`flex items-center justify-between p-3 rounded-lg border-2 transition-all text-left ${isSelected ? 'border-blue-600 bg-blue-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                    <div>
+                      <span className={`font-bold ${isSelected ? 'text-blue-700' : 'text-slate-800'}`}>{contact.name}</span>
+                      <p className="text-xs text-slate-500">{contact.phone}</p>
+                    </div>
+                    <MessageCircle size={16} className="text-green-500" />
+                  </button>
+                );
+              })}
+            </div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50">
+              <p className="text-xs font-bold text-slate-500 uppercase mb-2 flex items-center gap-1"><UserPlus size={14} /> Add New Contact</p>
+              <div className="flex flex-col gap-2">
+                <input type="text" placeholder="Name" value={newContactName} onChange={e => setNewContactName(e.target.value)}
+                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500" />
+                <input type="tel" placeholder="Phone (08xx...)" value={newContactPhone} onChange={e => setNewContactPhone(e.target.value)}
+                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500" />
+                <button disabled={savingContact || !newContactName.trim() || !newContactPhone.trim()} onClick={() => void handleAddContact()}
+                  className="bg-blue-600 text-white font-bold py-2 rounded-lg hover:bg-blue-700 disabled:bg-slate-300 text-sm">{savingContact ? 'Saving...' : 'Add & Select'}</button>
+              </div>
             </div>
           </div>
         </div>
@@ -693,14 +781,13 @@ export default function PosInterface() {
         </div>
       )}
 
-
       {/* ----------------- HEADER & NAVIGATION ----------------- */}
       <div className="flex-1 flex flex-col h-full overflow-hidden bg-white">
         <header className="bg-white p-4 flex justify-between items-center z-10 border-b border-slate-100">
           <div className="flex items-center gap-2 md:gap-6">
             <button onClick={() => setIsMobileMenuOpen(true)} className="md:hidden p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg"><Menu size={20} /></button>
             <h1 className="text-x2 font-black tracking-tight text-slate-800 flex items-center gap-2">
-              <Image src="/logo/logo.png" alt="Trisha Cafe Logo" width={32} height={32} quality={90} className="object-contain" /> TRISHA POS
+              <Image src="/logo/logo.png" alt="Trisha Coffea Logo" width={32} height={32} quality={90} className="object-contain" /> TRISHA POS
             </h1>
             <nav className="hidden md:flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
               <Link href="/" className="px-4 py-1.5 rounded-md text-sm font-bold bg-white text-blue-600 shadow-sm">POS</Link>
@@ -708,7 +795,12 @@ export default function PosInterface() {
               <Link href="/orders" className="flex items-center gap-1 rounded-md px-4 py-1.5 text-sm font-bold text-slate-500 hover:bg-slate-200 hover:text-slate-800">ORDERS{incomingScanOrderCount > 0 && <span className="ml-1 rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] leading-none text-white">{incomingScanOrderCount}</span>}</Link>
               <Link href="/manage" className="px-4 py-1.5 rounded-md text-sm font-bold text-slate-500 hover:text-slate-800 hover:bg-slate-200">EDIT</Link>
               <div className="w-px h-4 bg-slate-300 mx-1"></div>
-              <Link href="/kitchen" className="px-4 py-1.5 rounded-md text-sm font-bold text-slate-500 hover:text-orange-600 hover:bg-orange-100 flex items-center gap-1.5"><Flame size={14} /> KDS</Link>
+              <Link href="/kitchen" className="px-4 py-1.5 rounded-md text-sm font-bold text-slate-500 hover:text-orange-600 hover:bg-orange-100 inline-flex items-center gap-1.5">
+                <span className={`inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-xs font-bold leading-none tabular-nums ${queueCount > 0 ? 'bg-orange-500 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                {queueCount}
+                </span>
+                <span className="leading-none">ODS</span>
+              </Link>
             </nav>
           </div>
 
@@ -854,7 +946,7 @@ export default function PosInterface() {
               {appliedDiscounts.map(disc => (
                 <div key={disc.id} className="flex justify-between items-center text-sm">
                   <div className="flex items-center gap-1 text-emerald-600">
-                    <button onClick={() => removeDiscount(disc.id)} className="text-slate-400 hover:text-red-500"><X size={14}/></button>
+                    <button onClick={() => removeDiscount(disc.id)} className="text-slate-400 hover:text-red-500"><X size={14} /></button>
                     <span>{disc.name} {disc.type === 'percentage' && `(${disc.value}%)`}</span>
                   </div>
                   <span className="text-emerald-600 font-medium">- Rp {getDiscountAmount(disc).toLocaleString('id-ID')}</span>
@@ -862,7 +954,7 @@ export default function PosInterface() {
               ))}
             </div>
           )}
-          
+
           <div className="mb-4 pt-2">
             <button onClick={() => setIsDiscountModalOpen(true)} disabled={cart.length === 0} className="w-full bg-slate-50 border border-slate-200 py-2.5 rounded-lg text-sm font-semibold hover:bg-slate-100 text-slate-700 disabled:opacity-50 flex justify-center items-center gap-2">
               <Tag size={16} /> Add / Manage Discounts
@@ -874,8 +966,8 @@ export default function PosInterface() {
             <span className="font-black text-2xl text-blue-600">Rp {finalTotal.toLocaleString('id-ID')}</span>
           </div>
 
-          <button 
-            disabled={cart.length === 0} 
+          <button
+            disabled={cart.length === 0}
             onClick={() => setIsCheckoutModalOpen(true)}
             className="w-full bg-slate-800 disabled:bg-slate-300 text-white font-bold py-4 rounded-xl shadow-md hover:bg-slate-900 flex justify-center items-center gap-2 text-lg"
           >

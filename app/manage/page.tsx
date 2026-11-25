@@ -9,6 +9,9 @@ import {
 import {
   createDiscount, deleteDiscount, listDiscounts, updateDiscount,
 } from '@/app/actions/discounts';
+import {
+  createContact, deleteContact, listContacts, updateContact, type Contact,
+} from '@/app/actions/contacts';
 
 type Menu = {
   product_id: string; product_name: string; category: string; price: number; cogs: number; description: string;
@@ -23,16 +26,19 @@ const emptyMenu = { name: '', category: '', price: '', cogs: '', description: ''
 const emptyCategory = { name: '' };
 type DiscountForm = { name: string; type: 'percentage' | 'flat'; value: string; minimum_subtotal: string };
 const emptyDiscount: DiscountForm = { name: '', type: 'percentage', value: '', minimum_subtotal: '' };
+const emptyContact = { name: '', phone: '' };
 
 export default function ManageInterface() {
   const [tab, setTab] = useState<ManageTab>('menu');
   const [menus, setMenus] = useState<Menu[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [discounts, setDiscounts] = useState<Discount[]>([]);
+  const [contactList, setContactList] = useState<Contact[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [menuForm, setMenuForm] = useState(emptyMenu);
   const [categoryForm, setCategoryForm] = useState(emptyCategory);
   const [discountForm, setDiscountForm] = useState(emptyDiscount);
+  const [contactForm, setContactForm] = useState(emptyContact);
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -42,6 +48,7 @@ export default function ManageInterface() {
       setMenus(menuRows as Menu[]);
       setCategories(categoryRows);
       setDiscounts(discountRows as Discount[]);
+      setContactList(contactRows);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Failed to load data.');
     }
@@ -56,6 +63,7 @@ export default function ManageInterface() {
     setMenuForm(emptyMenu);
     setCategoryForm(emptyCategory);
     setDiscountForm(emptyDiscount);
+    setContactForm(emptyContact);
     setMessage('');
   }
 
@@ -88,6 +96,12 @@ export default function ManageInterface() {
         };
         if (editingId) await updateDiscount(editingId, input);
         else await createDiscount(input);
+      } else {
+        if (!contactForm.name.trim() || !contactForm.phone.trim()) {
+          throw new Error('Contact name and phone are required.');
+        }
+        if (editingId) await updateContact(editingId, contactForm);
+        else await createContact(contactForm);
       }
       await load();
       reset();
@@ -144,6 +158,7 @@ export default function ManageInterface() {
             <button onClick={() => { setTab('menu'); reset(); }} className={`flex-1 px-3 py-2 text-sm font-semibold sm:flex-none ${tab === 'menu' ? 'bg-slate-800 text-white' : 'text-slate-500 hover:bg-slate-100'}`}><Tags size={15} className="mr-1 inline" />Menu</button>
             <button onClick={() => { setTab('category'); reset(); }} className={`flex-1 px-3 py-2 text-sm font-semibold sm:flex-none ${tab === 'category' ? 'bg-slate-800 text-white' : 'text-slate-500 hover:bg-slate-100'}`}><Ribbon size={15} className="mr-1 inline" />Categories</button>
             <button onClick={() => { setTab('discount'); reset(); }} className={`flex-1 px-3 py-2 text-sm font-semibold sm:flex-none ${tab === 'discount' ? 'bg-slate-800 text-white' : 'text-slate-500 hover:bg-slate-100'}`}><Percent size={15} className="mr-1 inline" />Discounts</button>
+            <button onClick={() => { setTab('contacts'); reset(); }} className={`flex-1 px-3 py-2 text-sm font-semibold sm:flex-none ${tab === 'contacts' ? 'bg-slate-800 text-white' : 'text-slate-500 hover:bg-slate-100'}`}><Phone size={15} className="mr-1 inline" />Contacts</button>
           </div>
         </header>
         {message && <p className="mb-4 border border-blue-100 bg-blue-50 p-3 text-sm text-blue-700 shadow-sm">{message}</p>}
@@ -163,11 +178,15 @@ export default function ManageInterface() {
             <table className="w-full min-w-[560px] text-left text-sm"><thead><tr className="border-b bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><th className="p-4">Name</th><th className="p-4">Type</th><th className="p-4">Value</th><th className="p-4 text-right">Actions</th></tr></thead>
               <tbody>{discounts.map(item => <tr key={item.discount_id} className="border-b last:border-0 hover:bg-slate-50"><td className="p-4 font-semibold">{item.discount_name}</td><td className="p-4 text-slate-500">{item.discount_type}</td><td className="p-4">{item.discount_type === 'flat' ? `Rp ${Number(item.discount_value).toLocaleString('id-ID')}` : `${item.discount_value}%`}</td><td className="p-4 text-right"><button aria-label={`Edit ${item.discount_name}`} onClick={() => editDiscount(item)} className="mr-2 border border-blue-100 p-2 text-blue-600 shadow-sm hover:bg-blue-50"><Edit size={16} /></button><button aria-label={`Delete ${item.discount_name}`} onClick={() => void remove(item.discount_id, 'discount')} className="border border-red-100 p-2 text-red-600 shadow-sm hover:bg-red-50"><Trash2 size={16} /></button></td></tr>)}</tbody>
             </table>
+          ) : (
+            <table className="w-full min-w-[400px] text-left text-sm"><thead><tr className="border-b bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><th className="p-4">Name</th><th className="p-4">Phone</th><th className="p-4 text-right">Actions</th></tr></thead>
+              <tbody>{contactList.map(item => <tr key={item.contact_id} className="border-b last:border-0 hover:bg-slate-50"><td className="p-4 font-semibold">{item.name}</td><td className="p-4 text-slate-500">{item.phone}</td><td className="p-4 text-right"><button aria-label={`Edit ${item.name}`} onClick={() => editContactItem(item)} className="mr-2 border border-blue-100 p-2 text-blue-600 shadow-sm hover:bg-blue-50"><Edit size={16} /></button><button aria-label={`Delete ${item.name}`} onClick={() => void remove(item.contact_id, 'contacts')} className="border border-red-100 p-2 text-red-600 shadow-sm hover:bg-red-50"><Trash2 size={16} /></button></td></tr>)}</tbody>
+            </table>
           )}
           </div>
         </section>
         <aside className="border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="mb-5 flex items-center justify-between"><div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{editingId ? 'Update existing' : 'Create new'}</p><h2 className="font-bold">{editingId ? 'Edit' : 'Add'} {tab}</h2></div><button aria-label="Reset form" onClick={reset} className="border border-blue-100 bg-blue-50 p-2 text-blue-600 shadow-sm hover:bg-blue-100"><Plus size={18} /></button></div>
+        <div className="mb-5 flex items-center justify-between"><div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{editingId ? 'Update existing' : 'Create new'}</p><h2 className="font-bold">{editingId ? 'Edit' : 'Add'} {tab === 'contacts' ? 'contact' : tab}</h2></div><button aria-label="Reset form" onClick={reset} className="border border-blue-100 bg-blue-50 p-2 text-blue-600 shadow-sm hover:bg-blue-100"><Plus size={18} /></button></div>
         {tab === 'menu' ? <div className="space-y-3">
           <input className="field" placeholder="Name" value={menuForm.name} onChange={e => setMenuForm({ ...menuForm, name: e.target.value })} />
           <select className="field" value={menuForm.category} onChange={e => setMenuForm({ ...menuForm, category: e.target.value })} required><option value="" disabled>Select category</option>{categories.map(category => <option key={category} value={category}>{category}</option>)}</select>
@@ -182,6 +201,9 @@ export default function ManageInterface() {
           <select className="field" value={discountForm.type} onChange={e => setDiscountForm({ ...discountForm, type: e.target.value as 'percentage' | 'flat' })}><option value="percentage">Percentage</option><option value="flat">Flat</option></select>
           <input className="field" type="number" placeholder="Value" value={discountForm.value} onChange={e => setDiscountForm({ ...discountForm, value: e.target.value })} />
           <input className="field" type="number" placeholder="Minimum subtotal" value={discountForm.minimum_subtotal} onChange={e => setDiscountForm({ ...discountForm, minimum_subtotal: e.target.value })} />
+        </div> : <div className="space-y-3">
+          <input className="field" placeholder="Contact name" value={contactForm.name} onChange={e => setContactForm({ ...contactForm, name: e.target.value })} />
+          <input className="field" type="tel" placeholder="Phone number (08xx...)" value={contactForm.phone} onChange={e => setContactForm({ ...contactForm, phone: e.target.value })} />
         </div>}
         <button disabled={saving || (tab === 'menu' && categories.length === 0)} onClick={() => void save()} className="mt-5 w-full border border-blue-600 bg-blue-600 p-3 font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-50">{saving ? 'Saving...' : editingId ? 'Update' : 'Save'}</button>
         </aside>
