@@ -15,19 +15,22 @@ export async function createTransaction(input: {
   cash_received?: number;
   status?: 'pending' | 'paid' | 'voided';
   notes?: string;
+  contact_id?: string | null;
 }) {
   const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Authentication required');
 
-  const { data, error } = await supabase.rpc('create_pos_transaction', {
+  const rpcParams: Record<string, unknown> = {
     p_payment_method: input.payment_method,
     p_items: input.items,
     p_discount_ids: input.discount_ids ?? [],
     p_cash_received: input.cash_received ?? 0,
     p_status: input.status ?? 'paid',
     p_notes: input.notes ?? '',
-  });
+  };
+  if (input.contact_id) rpcParams.p_contact_id = input.contact_id;
+  const { data, error } = await supabase.rpc('create_pos_transaction', rpcParams);
   if (error) throw new Error(error.message);
 
   const productIds = input.items.map(item => item.product_id);
@@ -71,7 +74,7 @@ export async function listTransactions(options?: {
   if (!user) throw new Error('Authentication required');
   let query = supabase
     .from('transactions')
-    .select('*, transaction_items(*), transaction_discounts(*)')
+    .select('*, transaction_items(*), transaction_discounts(*), contacts(name, phone)')
     .order('created_at', { ascending: false })
     .limit(options?.limit ?? 1000);
   if (options?.from) query = query.gte('created_at', options.from);
@@ -81,19 +84,39 @@ export async function listTransactions(options?: {
   return data;
 }
 
-export async function closeOpenBill(transactionId: string) {
+export async function closeOpenBill(transactionId: string, paymentMethod?: string) {
+  const supabase = await createSupabaseServerClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Authentication required');
+
+  const updatePayload: Record<string, string> = { status: 'paid' };
+  if (paymentMethod && paymentMethod !== 'open_bill') {
+    updatePayload.payment_method = paymentMethod;
+  }
+
+  const { data, error } = await supabase
+    .from('transactions')
+    .update(updatePayload)
+    .eq('transaction_id', transactionId)
+    .eq('cashier_id', user.id)
+    .eq('payment_method', 'open_bill')
+    .eq('status', 'pending')
+    .select('*, transaction_items(*), transaction_discounts(*), contacts(name, phone)')
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function getTransactionReceipt(transactionId: string) {
   const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Authentication required');
 
   const { data, error } = await supabase
     .from('transactions')
-    .update({ status: 'paid' })
+    .select('*, transaction_items(*), transaction_discounts(*), contacts(name, phone)')
     .eq('transaction_id', transactionId)
-    .eq('cashier_id', user.id)
-    .eq('payment_method', 'open_bill')
-    .eq('status', 'pending')
-    .select()
     .single();
 
   if (error) throw new Error(error.message);

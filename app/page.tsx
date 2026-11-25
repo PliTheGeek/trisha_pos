@@ -1,12 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Coffee, Croissant, Search, ShoppingBag, Trash2, User, X, Tag, Store, History, Settings, Flame, Menu, Banknote, QrCode, CreditCard, Pencil, Receipt } from 'lucide-react';
+import { Coffee, Croissant, MessageCircle, Phone, Search, ShoppingBag, Trash2, User, UserPlus, X, Tag, Store, History, Settings, Flame, Menu, Banknote, QrCode, CreditCard, Pencil, Receipt } from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { createTransaction } from '@/app/actions/transactions';
 import { listDiscounts } from '@/app/actions/discounts';
 import { listMenu } from '@/app/actions/menu';
+import { listContacts, createContact, type Contact } from '@/app/actions/contacts';
 
 const normalizeCategory = (category: unknown) => {
   const value = String(category ?? '').trim().toLowerCase().replace(/\s+/g, '_');
@@ -21,10 +22,53 @@ const normalizeCategory = (category: unknown) => {
 
 const menuCategories = ['All', 'Coffee', 'Non-Coffee', 'Snacks', 'Retail'];
 
+function formatReceiptText(cart: any[], subtotal: number, totalDiscountAmount: number, finalTotal: number, appliedDiscounts: any[], paymentMethod: string, cashGiven: number | '', contactName?: string) {
+  const date = new Date().toLocaleString('id-ID');
+  const lines: string[] = [
+    '================================',
+    '       *TRISHA COFFEA*',
+    '================================',
+    `Tanggal : ${date}`,
+    `Bayar   : ${paymentMethod}`,
+  ];
+  if (contactName) lines.push(`Pelanggan: ${contactName}`);
+  lines.push('--------------------------------');
+  cart.forEach(item => {
+    lines.push(`1x ${item.name}`);
+    lines.push(`   Rp ${item.finalPrice.toLocaleString('id-ID')}`);
+    const note = [item.notes, item.orderNote].filter(Boolean).join(', ');
+    if (note) lines.push(`   Note: ${note}`);
+  });
+  lines.push('--------------------------------');
+  lines.push(`Subtotal : Rp ${subtotal.toLocaleString('id-ID')}`);
+  if (totalDiscountAmount > 0) {
+    lines.push(`Diskon   : -Rp ${totalDiscountAmount.toLocaleString('id-ID')}`);
+  }
+  lines.push(`*TOTAL   : Rp ${finalTotal.toLocaleString('id-ID')}*`);
+  if (paymentMethod === 'Cash' && cashGiven !== '' && Number(cashGiven) > 0) {
+    lines.push(`Tunai    : Rp ${Number(cashGiven).toLocaleString('id-ID')}`);
+    lines.push(`Kembali  : Rp ${Math.max(0, Number(cashGiven) - finalTotal).toLocaleString('id-ID')}`);
+  }
+  lines.push('================================');
+  lines.push('  Terima kasih sudah berkunjung!');
+  lines.push('        *Trisha Coffea*');
+  lines.push('================================');
+  return lines.join('\n');
+}
+
+function sendWhatsApp(phone: string, text: string) {
+  let normalized = phone.replace(/\D/g, '');
+  if (normalized.startsWith('0')) normalized = '62' + normalized.slice(1);
+  else if (!normalized.startsWith('62')) normalized = '62' + normalized;
+  const url = `https://wa.me/${normalized}?text=${encodeURIComponent(text)}`;
+  window.open(url, '_blank');
+}
+
 export default function PosInterface() {
 
   // ---------------- DATA ----------------
   const [availableDiscounts, setAvailableDiscounts] = useState<any[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
 
   // ---------------- STATE ----------------
   const [cart, setCart] = useState<any[]>([]); 
@@ -32,6 +76,13 @@ export default function PosInterface() {
   const [isLoadingMenu, setIsLoadingMenu] = useState(true);
   const [appliedDiscounts, setAppliedDiscounts] = useState<any[]>([]); 
   const [activeCategory, setActiveCategory] = useState('All');
+  
+  // Contact selection
+  const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
+  const [isContactModalOpen, setIsContactModalOpen] = useState(false);
+  const [newContactName, setNewContactName] = useState('');
+  const [newContactPhone, setNewContactPhone] = useState('');
+  const [savingContact, setSavingContact] = useState(false);
   
   // Modals & Drawers
   const [selectedItem, setSelectedItem] = useState<any>(null); 
@@ -48,7 +99,7 @@ export default function PosInterface() {
   useEffect(() => {
     async function getMenuItems() {
       try {
-        const [rows, discounts] = await Promise.all([listMenu(), listDiscounts()]);
+        const [rows, discounts, contactList] = await Promise.all([listMenu(), listDiscounts(), listContacts()]);
         const normalizedItems = rows.map((item: any, index: number) => ({
           ...item,
           id: String(item.product_id),
@@ -58,6 +109,7 @@ export default function PosInterface() {
           category: normalizeCategory(item.category),
         }));
         setMenuItems(normalizedItems);
+        setContacts(contactList);
         setAvailableDiscounts(discounts.filter((discount: any) => discount.is_active).map((discount: any) => ({
           ...discount,
           id: discount.discount_id,
@@ -75,6 +127,8 @@ export default function PosInterface() {
 
     getMenuItems();
   }, []);
+
+  const selectedContact = contacts.find(c => c.contact_id === selectedContactId) ?? null;
 
   // ---------------- ACTIONS ----------------
   const handleProductClick = (item: any) => {
@@ -129,6 +183,22 @@ export default function PosInterface() {
     setAppliedDiscounts(appliedDiscounts.filter(d => d.id !== discountId));
   };
 
+  const handleAddContact = async () => {
+    if (!newContactName.trim() || !newContactPhone.trim()) return;
+    setSavingContact(true);
+    try {
+      const created = await createContact({ name: newContactName.trim(), phone: newContactPhone.trim() });
+      setContacts(prev => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setSelectedContactId(created.contact_id);
+      setNewContactName('');
+      setNewContactPhone('');
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Failed to save contact.');
+    } finally {
+      setSavingContact(false);
+    }
+  };
+
   const submitOrder = async (paymentMethod: string) => {
     setIsSubmittingOrder(true);
 
@@ -138,17 +208,29 @@ export default function PosInterface() {
         status: paymentMethod === 'Open Bill' ? 'pending' : 'paid',
         cash_received: paymentMethod === 'Cash' ? Number(cashGiven || 0) : 0,
         discount_ids: appliedDiscounts.map(discount => discount.id),
+        contact_id: selectedContactId,
         items: cart.map(item => ({
           product_id: item.id,
           quantity: 1,
           order_note: [item.notes, item.orderNote].filter(Boolean).join(', '),
         })),
       });
-      alert(`Order saved to Supabase. Paid via ${paymentMethod}.`);
+
+      // After successful order, offer to send WA receipt
+      if (selectedContact?.phone) {
+        const receiptText = formatReceiptText(cart, subtotal, totalDiscountAmount, finalTotal, appliedDiscounts, paymentMethod, cashGiven, selectedContact.name);
+        if (window.confirm(`Order berhasil! Kirim struk via WhatsApp ke ${selectedContact.name} (${selectedContact.phone})?`)) {
+          sendWhatsApp(selectedContact.phone, receiptText);
+        }
+      } else {
+        alert(`Order saved. Paid via ${paymentMethod}.`);
+      }
+
       setCart([]);
       setAppliedDiscounts([]);
       setIsCheckoutModalOpen(false);
       setCashGiven('');
+      setSelectedContactId(null);
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Failed to save order.');
     } finally {
@@ -254,12 +336,56 @@ export default function PosInterface() {
         </div>
       )}
 
+      {/* CONTACT MODAL */}
+      {isContactModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <h2 className="text-xl font-bold flex items-center gap-2"><Phone size={20}/> Select Contact</h2>
+              <button onClick={() => setIsContactModalOpen(false)} className="p-2 bg-slate-200 hover:bg-slate-300 rounded-full"><X size={20} /></button>
+            </div>
+            <div className="p-4 flex flex-col gap-2 overflow-y-auto flex-1">
+              <button onClick={() => { setSelectedContactId(null); setIsContactModalOpen(false); }}
+                className={`flex items-center gap-3 p-3 rounded-lg border-2 transition-all text-left ${!selectedContactId ? 'border-blue-600 bg-blue-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                <User size={18} className="text-slate-400" />
+                <span className="font-medium text-slate-600">No contact (walk-in)</span>
+              </button>
+              {contacts.map(contact => {
+                const isSelected = selectedContactId === contact.contact_id;
+                return (
+                  <button key={contact.contact_id} onClick={() => { setSelectedContactId(contact.contact_id); setIsContactModalOpen(false); }}
+                    className={`flex items-center justify-between p-3 rounded-lg border-2 transition-all text-left ${isSelected ? 'border-blue-600 bg-blue-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                    <div>
+                      <span className={`font-bold ${isSelected ? 'text-blue-700' : 'text-slate-800'}`}>{contact.name}</span>
+                      <p className="text-xs text-slate-500">{contact.phone}</p>
+                    </div>
+                    <MessageCircle size={16} className="text-green-500" />
+                  </button>
+                );
+              })}
+            </div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50">
+              <p className="text-xs font-bold text-slate-500 uppercase mb-2 flex items-center gap-1"><UserPlus size={14} /> Add New Contact</p>
+              <div className="flex flex-col gap-2">
+                <input type="text" placeholder="Name" value={newContactName} onChange={e => setNewContactName(e.target.value)}
+                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500" />
+                <input type="tel" placeholder="Phone (08xx...)" value={newContactPhone} onChange={e => setNewContactPhone(e.target.value)}
+                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500" />
+                <button disabled={savingContact || !newContactName.trim() || !newContactPhone.trim()} onClick={() => void handleAddContact()}
+                  className="bg-blue-600 text-white font-bold py-2 rounded-lg hover:bg-blue-700 disabled:bg-slate-300 text-sm">{savingContact ? 'Saving...' : 'Add & Select'}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isCheckoutModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col">
             <div className="p-6 text-center border-b border-slate-100 bg-slate-50">
               <h2 className="text-slate-500 font-bold tracking-widest text-sm mb-1 uppercase">Total Amount Due</h2>
               <h1 className="text-5xl font-black text-blue-600 tracking-tight">Rp {finalTotal.toLocaleString('id-ID')}</h1>
+              {selectedContact && <p className="text-sm text-slate-500 mt-2">Customer: {selectedContact.name}</p>}
             </div>
             <div className="p-6 flex flex-col gap-6">
               <div>
@@ -337,7 +463,7 @@ export default function PosInterface() {
           <div className="flex items-center gap-2 md:gap-6">
             <button onClick={() => setIsMobileMenuOpen(true)} className="md:hidden p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg"><Menu size={20} /></button>
             <h1 className="text-x2 font-black tracking-tight text-slate-800 flex items-center gap-2">
-              <Image src="/logo/logo.png" alt="Trisha Cafe Logo" width={32} height={32} quality={90} className="object-contain" /> TRISHA POS
+              <Image src="/logo/logo.png" alt="Trisha Coffea Logo" width={32} height={32} quality={90} className="object-contain" /> TRISHA POS
             </h1>
             <nav className="hidden md:flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
               <Link href="/" className="px-4 py-1.5 rounded-md text-sm font-bold bg-white text-blue-600 shadow-sm">POS</Link>
@@ -392,6 +518,26 @@ export default function PosInterface() {
             <span className="font-bold text-slate-800">Current Order</span>
           </div>
           <span className="bg-blue-100 text-blue-700 text-xs font-bold px-2 py-1 rounded">New Ticket</span>
+        </div>
+
+        {/* Contact selector */}
+        <div className="px-4 pt-3 pb-2 border-b border-slate-100">
+          <button onClick={() => setIsContactModalOpen(true)} className="w-full flex items-center justify-between gap-2 p-2.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors text-left">
+            <div className="flex items-center gap-2 min-w-0">
+              <Phone size={16} className={selectedContact ? 'text-green-600' : 'text-slate-400'} />
+              {selectedContact ? (
+                <div className="min-w-0">
+                  <span className="font-bold text-sm text-slate-800 block truncate">{selectedContact.name}</span>
+                  <span className="text-xs text-slate-500">{selectedContact.phone}</span>
+                </div>
+              ) : (
+                <span className="text-sm text-slate-500">Add contact (optional)</span>
+              )}
+            </div>
+            {selectedContact && (
+              <button onClick={e => { e.stopPropagation(); setSelectedContactId(null); }} className="text-slate-300 hover:text-red-500 p-1"><X size={14} /></button>
+            )}
+          </button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 bg-slate-50/50">
