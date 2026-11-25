@@ -453,7 +453,7 @@ export default function PosInterface() {
       return;
     }
     if (isOpenBill && !customerName) {
-      alert('Please enter an order name or select a contact so the open bill can be found later.');
+      alert('Please select a contact so the open bill can be found later.');
       return;
     }
 
@@ -970,40 +970,6 @@ export default function PosInterface() {
         </div>
 
         {/* Order type */}
-        <div className="grid grid-cols-2 gap-2 border-b border-slate-100 bg-white p-3 pt-0">
-          {([
-            { value: 'dine_in', label: 'Dine in' },
-            { value: 'takeaway', label: 'Takeaway' },
-          ] as const).map(option => (
-            <button
-              key={option.value}
-              type="button"
-              onClick={() => setOrderType(option.value)}
-              className={`rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${orderType === option.value ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Order name & contact */}
-        <div className="px-3 pb-2 bg-white grid grid-cols-2 gap-2">
-          <input
-            type="text"
-            value={orderName}
-            onChange={(e) => setOrderName(e.target.value)}
-            placeholder="Order name"
-            className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500 min-w-0"
-          />
-          <input
-            type="tel"
-            inputMode="tel"
-            value={orderContact}
-            onChange={(e) => setOrderContact(e.target.value)}
-            placeholder="WhatsApp (08xx...)"
-            className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500 min-w-0"
-          />
-        </div>
         <div className="grid grid-cols-2 gap-2 border-b border-slate-100 bg-white p-3 pt-0">
           {([
             { value: 'dine_in', label: 'Dine in' },
