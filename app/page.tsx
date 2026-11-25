@@ -1,13 +1,15 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Coffee, Croissant, MessageCircle, Phone, Search, ShoppingBag, Trash2, User, UserPlus, X, Tag, Store, History, Settings, Flame, Menu, Banknote, QrCode, CreditCard, Pencil, Receipt } from 'lucide-react';
+import { Coffee, Croissant, MessageCircle, Phone, Search, ShoppingBag, Trash2, User, UserPlus, X, Tag, Store, History, Settings, Menu, Banknote, QrCode, CreditCard, Pencil, Receipt } from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { createTransaction } from '@/app/actions/transactions';
 import { listDiscounts } from '@/app/actions/discounts';
 import { listMenu } from '@/app/actions/menu';
 import { listContacts, createContact, type Contact } from '@/app/actions/contacts';
+import { listKitchenOrders } from '@/app/actions/kitchen';
+import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
 const normalizeCategory = (category: unknown) => {
   const value = String(category ?? '').trim().toLowerCase().replace(/\s+/g, '_');
@@ -69,29 +71,30 @@ export default function PosInterface() {
   // ---------------- DATA ----------------
   const [availableDiscounts, setAvailableDiscounts] = useState<any[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [queueCount, setQueueCount] = useState(0);
 
   // ---------------- STATE ----------------
-  const [cart, setCart] = useState<any[]>([]); 
+  const [cart, setCart] = useState<any[]>([]);
   const [menuItems, setMenuItems] = useState<any[]>([]);
   const [isLoadingMenu, setIsLoadingMenu] = useState(true);
-  const [appliedDiscounts, setAppliedDiscounts] = useState<any[]>([]); 
+  const [appliedDiscounts, setAppliedDiscounts] = useState<any[]>([]);
   const [activeCategory, setActiveCategory] = useState('All');
-  
+
   // Contact selection
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const [isContactModalOpen, setIsContactModalOpen] = useState(false);
   const [newContactName, setNewContactName] = useState('');
   const [newContactPhone, setNewContactPhone] = useState('');
   const [savingContact, setSavingContact] = useState(false);
-  
+
   // Modals & Drawers
-  const [selectedItem, setSelectedItem] = useState<any>(null); 
-  const [tempOptions, setTempOptions] = useState<any>({}); 
-  const [isDiscountModalOpen, setIsDiscountModalOpen] = useState(false); 
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false); 
+  const [selectedItem, setSelectedItem] = useState<any>(null);
+  const [tempOptions, setTempOptions] = useState<any>({});
+  const [isDiscountModalOpen, setIsDiscountModalOpen] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
   const [cashGiven, setCashGiven] = useState<number | ''>('');
-  
+
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
@@ -99,7 +102,12 @@ export default function PosInterface() {
   useEffect(() => {
     async function getMenuItems() {
       try {
-        const [rows, discounts, contactList] = await Promise.all([listMenu(), listDiscounts(), listContacts()]);
+        const [rows, discounts, contactList, kitchenOrders] = await Promise.all([
+          listMenu(),
+          listDiscounts(),
+          listContacts(),
+          listKitchenOrders(),
+        ]);
         const normalizedItems = rows.map((item: any, index: number) => ({
           ...item,
           id: String(item.product_id),
@@ -110,13 +118,18 @@ export default function PosInterface() {
         }));
         setMenuItems(normalizedItems);
         setContacts(contactList);
-        setAvailableDiscounts(discounts.filter((discount: any) => discount.is_active).map((discount: any) => ({
-          ...discount,
-          id: discount.discount_id,
-          name: discount.discount_name,
-          type: discount.discount_type,
-          value: Number(discount.discount_value),
-        })));
+        setQueueCount(Array.isArray(kitchenOrders) ? kitchenOrders.length : 0);
+        setAvailableDiscounts(
+          discounts
+            .filter((discount: any) => discount.is_active)
+            .map((discount: any) => ({
+              ...discount,
+              id: discount.discount_id,
+              name: discount.discount_name,
+              type: discount.discount_type,
+              value: Number(discount.discount_value),
+            }))
+        );
       } catch (error) {
         console.error('Failed to load menu:', error);
         setMenuItems([]);
@@ -125,7 +138,34 @@ export default function PosInterface() {
       }
     }
 
-    getMenuItems();
+    void getMenuItems();
+  }, []);
+
+  // Keep ODS queue count synced in real time
+  useEffect(() => {
+    const supabase = createSupabaseBrowserClient();
+    const refreshQueueCount = async () => {
+      try {
+        const orders = await listKitchenOrders();
+        setQueueCount(Array.isArray(orders) ? orders.length : 0);
+      } catch {
+        // Ignore transient errors
+      }
+    };
+
+    const channel = supabase
+      .channel('pos-ods-queue-count')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'kitchen_orders' }, () => {
+        void refreshQueueCount();
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'kitchen_orders' }, () => {
+        void refreshQueueCount();
+      })
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
   }, []);
 
   const selectedContact = contacts.find(c => c.contact_id === selectedContactId) ?? null;
@@ -134,7 +174,7 @@ export default function PosInterface() {
   const handleProductClick = (item: any) => {
     if (item.options && item.options.length > 0) {
       setSelectedItem(item);
-      setTempOptions({}); 
+      setTempOptions({});
     } else addToCart(item, {});
   };
 
@@ -144,13 +184,13 @@ export default function PosInterface() {
 
   const addToCart = (item: any, selectedModifiers: any) => {
     let finalPrice = item.price;
-    let notes: string[] = [];
+    const notes: string[] = [];
     Object.values(selectedModifiers).forEach((mod: any) => {
       finalPrice += mod.addPrice;
       if (mod.name !== 'Hot' && mod.name !== 'Fresh Milk') notes.push(mod.name);
     });
     setCart([...cart, { cartId: Math.random().toString(), id: item.id, name: item.name, finalPrice, notes: notes.join(', '), orderNote: '' }]);
-    setSelectedItem(null); 
+    setSelectedItem(null);
   };
 
   const startEditingNote = (cartItem: any) => {
@@ -216,6 +256,10 @@ export default function PosInterface() {
         })),
       });
 
+      void listKitchenOrders()
+        .then(orders => setQueueCount(Array.isArray(orders) ? orders.length : 0))
+        .catch(() => {});
+
       // After successful order, offer to send WA receipt
       if (selectedContact?.phone) {
         const receiptText = formatReceiptText(cart, subtotal, totalDiscountAmount, finalTotal, appliedDiscounts, paymentMethod, cashGiven, selectedContact.name);
@@ -250,7 +294,7 @@ export default function PosInterface() {
 
   return (
     <div className="flex flex-col md:flex-row h-screen bg-slate-50 text-slate-800 relative">
-      
+
       {/* MOBILE DRAWER */}
       {isMobileMenuOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 md:hidden flex" onClick={() => setIsMobileMenuOpen(false)}>
@@ -259,11 +303,16 @@ export default function PosInterface() {
               <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 bg-slate-200 rounded-full"><X size={16} /></button>
             </div>
             <div className="p-4 flex flex-col gap-2">
-              <Link href="/" className="p-3 rounded-lg bg-blue-50 text-blue-700 font-bold flex items-center gap-3"><Store size={20}/> POS</Link>
-              <Link href="/history" className="p-3 rounded-lg text-slate-600 hover:bg-slate-50 font-bold flex items-center gap-3"><History size={20}/> LOGS</Link>
-              <Link href="/manage" className="p-3 rounded-lg text-slate-600 hover:bg-slate-50 font-bold flex items-center gap-3"><Settings size={20}/> EDIT</Link>
-              <hr className="my-2 border-slate-100"/>
-              <Link href="/kitchen" className="p-3 rounded-lg text-slate-600 hover:bg-orange-50 hover:text-orange-600 font-bold flex items-center gap-3"><Flame size={20}/> KDS</Link>
+              <Link href="/" className="p-3 rounded-lg bg-blue-50 text-blue-700 font-bold flex items-center gap-3"><Store size={20} /> POS</Link>
+              <Link href="/history" className="p-3 rounded-lg text-slate-600 hover:bg-slate-50 font-bold flex items-center gap-3"><History size={20} /> LOGS</Link>
+              <Link href="/manage" className="p-3 rounded-lg text-slate-600 hover:bg-slate-50 font-bold flex items-center gap-3"><Settings size={20} /> EDIT</Link>
+              <hr className="my-2 border-slate-100" />
+              <Link href="/kitchen" className="p-3 rounded-lg text-slate-600 hover:bg-orange-50 hover:text-orange-600 font-bold flex items-center justify-between">
+                <span>ODS</span>
+                <span className={`min-w-[24px] h-6 px-2 rounded-full text-xs font-bold flex items-center justify-center ${queueCount > 0 ? 'bg-orange-500 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                  {queueCount}
+                </span>
+              </Link>
             </div>
           </div>
         </div>
@@ -309,7 +358,7 @@ export default function PosInterface() {
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden flex flex-col">
             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h2 className="text-xl font-bold flex items-center gap-2"><Tag size={20}/> Apply Discount</h2>
+              <h2 className="text-xl font-bold flex items-center gap-2"><Tag size={20} /> Apply Discount</h2>
               <button onClick={() => setIsDiscountModalOpen(false)} className="p-2 bg-slate-200 hover:bg-slate-300 rounded-full"><X size={20} /></button>
             </div>
             <div className="p-4 flex flex-col gap-3">
@@ -326,7 +375,7 @@ export default function PosInterface() {
                       {disc.type === 'percentage' ? `${disc.value}%` : `-Rp ${disc.value.toLocaleString('id-ID')}`}
                     </span>
                   </button>
-                )
+                );
               })}
             </div>
             <div className="p-4 border-t border-slate-100 bg-slate-50">
@@ -341,7 +390,7 @@ export default function PosInterface() {
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h2 className="text-xl font-bold flex items-center gap-2"><Phone size={20}/> Select Contact</h2>
+              <h2 className="text-xl font-bold flex items-center gap-2"><Phone size={20} /> Select Contact</h2>
               <button onClick={() => setIsContactModalOpen(false)} className="p-2 bg-slate-200 hover:bg-slate-300 rounded-full"><X size={20} /></button>
             </div>
             <div className="p-4 flex flex-col gap-2 overflow-y-auto flex-1">
@@ -420,7 +469,7 @@ export default function PosInterface() {
               )}
             </div>
             <div className="p-4 border-t border-slate-100">
-              <button onClick={() => {setIsCheckoutModalOpen(false); setCashGiven('');}} className="w-full bg-slate-100 text-slate-600 font-bold py-3 rounded-xl hover:bg-slate-200">Cancel</button>
+              <button onClick={() => { setIsCheckoutModalOpen(false); setCashGiven(''); }} className="w-full bg-slate-100 text-slate-600 font-bold py-3 rounded-xl hover:bg-slate-200">Cancel</button>
             </div>
           </div>
         </div>
@@ -456,7 +505,6 @@ export default function PosInterface() {
         </div>
       )}
 
-
       {/* ----------------- HEADER & NAVIGATION ----------------- */}
       <div className="flex-1 flex flex-col h-full overflow-hidden bg-white">
         <header className="bg-white p-4 flex justify-between items-center z-10 border-b border-slate-100">
@@ -470,7 +518,12 @@ export default function PosInterface() {
               <Link href="/history" className="px-4 py-1.5 rounded-md text-sm font-bold text-slate-500 hover:text-slate-800 hover:bg-slate-200">LOGS</Link>
               <Link href="/manage" className="px-4 py-1.5 rounded-md text-sm font-bold text-slate-500 hover:text-slate-800 hover:bg-slate-200">EDIT</Link>
               <div className="w-px h-4 bg-slate-300 mx-1"></div>
-              <Link href="/kitchen" className="px-4 py-1.5 rounded-md text-sm font-bold text-slate-500 hover:text-orange-600 hover:bg-orange-100 flex items-center gap-1.5"><Flame size={14} /> KDS</Link>
+              <Link href="/kitchen" className="px-4 py-1.5 rounded-md text-sm font-bold text-slate-500 hover:text-orange-600 hover:bg-orange-100 inline-flex items-center gap-1.5">
+                <span className={`inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-xs font-bold leading-none tabular-nums ${queueCount > 0 ? 'bg-orange-500 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                {queueCount}
+                </span>
+                <span className="leading-none">ODS</span>
+              </Link>
             </nav>
           </div>
 
@@ -522,22 +575,42 @@ export default function PosInterface() {
 
         {/* Contact selector */}
         <div className="px-4 pt-3 pb-2 border-b border-slate-100">
-          <button onClick={() => setIsContactModalOpen(true)} className="w-full flex items-center justify-between gap-2 p-2.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors text-left">
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => setIsContactModalOpen(true)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setIsContactModalOpen(true);
+              }
+            }}
+            className="w-full flex items-center justify-between gap-2 p-2.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors text-left cursor-pointer"
+          >
             <div className="flex items-center gap-2 min-w-0">
-              <Phone size={16} className={selectedContact ? 'text-green-600' : 'text-slate-400'} />
+              <Phone size={16} className={selectedContact ? 'text-blue-600 shrink-0' : 'text-slate-400 shrink-0'} />
               {selectedContact ? (
                 <div className="min-w-0">
-                  <span className="font-bold text-sm text-slate-800 block truncate">{selectedContact.name}</span>
-                  <span className="text-xs text-slate-500">{selectedContact.phone}</span>
+                  <p className="text-sm font-bold text-slate-800 truncate">{selectedContact.name}</p>
+                  <p className="text-xs text-slate-500 truncate">{selectedContact.phone}</p>
                 </div>
               ) : (
-                <span className="text-sm text-slate-500">Add contact (optional)</span>
+                <span className="text-sm text-slate-500 font-medium">Select Contact (Optional)</span>
               )}
             </div>
             {selectedContact && (
-              <button onClick={e => { e.stopPropagation(); setSelectedContactId(null); }} className="text-slate-300 hover:text-red-500 p-1"><X size={14} /></button>
+              <button
+                type="button"
+                onClick={e => {
+                  e.stopPropagation();
+                  setSelectedContactId(null);
+                }}
+                className="shrink-0 self-center text-slate-300 hover:text-red-500 p-1"
+              >
+                <X size={14} />
+              </button>
             )}
-          </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 bg-slate-50/50">
@@ -552,14 +625,14 @@ export default function PosInterface() {
                 <div className="flex-1 pr-2">
                   <h4 className="font-bold text-slate-800">{cartItem.name}</h4>
                   {cartItem.notes && <p className="text-blue-600 font-medium text-xs mt-1 bg-blue-50 border border-blue-100 inline-block px-1.5 py-0.5 rounded">+ {cartItem.notes}</p>}
-                    {cartItem.orderNote && <p className="text-slate-500 text-xs mt-1 italic">Note: {cartItem.orderNote}</p>}
+                  {cartItem.orderNote && <p className="text-slate-500 text-xs mt-1 italic">Note: {cartItem.orderNote}</p>}
                 </div>
                 <div className="flex flex-col items-end gap-2">
                   <span className="font-bold text-slate-800">Rp {cartItem.finalPrice.toLocaleString('id-ID')}</span>
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => startEditingNote(cartItem)} className="text-slate-300 hover:text-blue-500" title="Add item note"><Pencil size={16} /></button>
-                      <button onClick={() => removeFromCart(cartItem.cartId)} className="text-slate-300 hover:text-red-500" title="Remove item"><Trash2 size={16} /></button>
-                    </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => startEditingNote(cartItem)} className="text-slate-300 hover:text-blue-500" title="Add item note"><Pencil size={16} /></button>
+                    <button onClick={() => removeFromCart(cartItem.cartId)} className="text-slate-300 hover:text-red-500" title="Remove item"><Trash2 size={16} /></button>
+                  </div>
                 </div>
               </div>
             ))
@@ -577,15 +650,15 @@ export default function PosInterface() {
               {appliedDiscounts.map(disc => (
                 <div key={disc.id} className="flex justify-between items-center text-sm">
                   <div className="flex items-center gap-1 text-emerald-600">
-                    <button onClick={() => removeDiscount(disc.id)} className="text-slate-400 hover:text-red-500"><X size={14}/></button>
+                    <button onClick={() => removeDiscount(disc.id)} className="text-slate-400 hover:text-red-500"><X size={14} /></button>
                     <span>{disc.name} {disc.type === 'percentage' && `(${disc.value}%)`}</span>
                   </div>
-                  <span className="text-emerald-600 font-medium">- Rp {(disc.type === 'percentage' ? (subtotal * (disc.value/100)) : disc.value).toLocaleString('id-ID')}</span>
+                  <span className="text-emerald-600 font-medium">- Rp {(disc.type === 'percentage' ? (subtotal * (disc.value / 100)) : disc.value).toLocaleString('id-ID')}</span>
                 </div>
               ))}
             </div>
           )}
-          
+
           <div className="mb-4 pt-2">
             <button onClick={() => setIsDiscountModalOpen(true)} disabled={cart.length === 0} className="w-full bg-slate-50 border border-slate-200 py-2.5 rounded-lg text-sm font-semibold hover:bg-slate-100 text-slate-700 disabled:opacity-50 flex justify-center items-center gap-2">
               <Tag size={16} /> Add / Manage Discounts
@@ -597,8 +670,8 @@ export default function PosInterface() {
             <span className="font-black text-2xl text-blue-600">Rp {finalTotal.toLocaleString('id-ID')}</span>
           </div>
 
-          <button 
-            disabled={cart.length === 0} 
+          <button
+            disabled={cart.length === 0}
             onClick={() => setIsCheckoutModalOpen(true)}
             className="w-full bg-slate-800 disabled:bg-slate-300 text-white font-bold py-4 rounded-xl shadow-md hover:bg-slate-900 flex justify-center items-center gap-2 text-lg"
           >
