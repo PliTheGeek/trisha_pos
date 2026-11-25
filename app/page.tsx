@@ -969,6 +969,23 @@ export default function PosInterface() {
           </div>
         </div>
 
+        {/* Order type */}
+        <div className="grid grid-cols-2 gap-2 border-b border-slate-100 bg-white p-3 pt-0">
+          {([
+            { value: 'dine_in', label: 'Dine in' },
+            { value: 'takeaway', label: 'Takeaway' },
+          ] as const).map(option => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => setOrderType(option.value)}
+              className={`rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${orderType === option.value ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+
         {/* Order name & contact */}
         <div className="px-3 pb-2 bg-white grid grid-cols-2 gap-2">
           <input
