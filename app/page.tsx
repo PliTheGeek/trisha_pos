@@ -1,13 +1,39 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Ribbon, Search, ShoppingBag, Trash2, User, X, Tag, Store, History, Settings, Flame, Menu, Banknote, QrCode, CreditCard, Pencil, Receipt, Plus, Minus, ClipboardList } from 'lucide-react';
+import {
+  Ribbon,
+  Search,
+  ShoppingBag,
+  Trash2,
+  User,
+  UserPlus,
+  Phone,
+  MessageCircle,
+  X,
+  Tag,
+  Store,
+  History,
+  Settings,
+  Menu,
+  Banknote,
+  QrCode,
+  CreditCard,
+  Pencil,
+  Receipt,
+  Plus,
+  Minus,
+  ClipboardList,
+} from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { createTransaction } from '@/app/actions/transactions';
 import { listDiscounts } from '@/app/actions/discounts';
 import { listMenu, listMenuCategories } from '@/app/actions/menu';
 import { getIncomingScanOrderCount } from '@/app/actions/scan-orders';
+import { listContacts, createContact, type Contact } from '@/app/actions/contacts';
+import { listKitchenOrders } from '@/app/actions/kitchen';
+import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
 // ---------------- TYPES ----------------
 type PaymentMethod = 'cash' | 'qris' | 'card';
@@ -43,9 +69,9 @@ const splitMethodOptions = [
 // "0812-3456-789" -> "628123456789" | "+65 9123 4567" -> "6591234567"
 const normalizeWhatsAppNumber = (raw: string) => {
   const trimmed = raw.trim();
-  let digits = trimmed.replace(/\D/g, '');
+  const digits = trimmed.replace(/\D/g, '');
   if (!digits) return '';
-  if (trimmed.startsWith('+')) return digits;          // already international
+  if (trimmed.startsWith('+')) return digits; // already international
   if (digits.startsWith('62')) return digits;
   if (digits.startsWith('0')) return `62${digits.slice(1)}`;
   if (digits.startsWith('8')) return `62${digits}`;
@@ -54,50 +80,7 @@ const normalizeWhatsAppNumber = (raw: string) => {
 
 const isValidWhatsAppNumber = (digits: string) => /^\d{9,15}$/.test(digits);
 
-function formatReceiptText(cart: any[], subtotal: number, totalDiscountAmount: number, finalTotal: number, appliedDiscounts: any[], paymentMethod: string, cashGiven: number | '', contactName?: string) {
-  const date = new Date().toLocaleString('id-ID');
-  const lines: string[] = [
-    '================================',
-    '       *TRISHA COFFEA*',
-    '================================',
-    `Tanggal : ${date}`,
-    `Bayar   : ${paymentMethod}`,
-  ];
-  if (contactName) lines.push(`Pelanggan: ${contactName}`);
-  lines.push('--------------------------------');
-  cart.forEach(item => {
-    lines.push(`1x ${item.name}`);
-    lines.push(`   Rp ${item.finalPrice.toLocaleString('id-ID')}`);
-    const note = [item.notes, item.orderNote].filter(Boolean).join(', ');
-    if (note) lines.push(`   Note: ${note}`);
-  });
-  lines.push('--------------------------------');
-  lines.push(`Subtotal : Rp ${subtotal.toLocaleString('id-ID')}`);
-  if (totalDiscountAmount > 0) {
-    lines.push(`Diskon   : -Rp ${totalDiscountAmount.toLocaleString('id-ID')}`);
-  }
-  lines.push(`*TOTAL   : Rp ${finalTotal.toLocaleString('id-ID')}*`);
-  if (paymentMethod === 'Cash' && cashGiven !== '' && Number(cashGiven) > 0) {
-    lines.push(`Tunai    : Rp ${Number(cashGiven).toLocaleString('id-ID')}`);
-    lines.push(`Kembali  : Rp ${Math.max(0, Number(cashGiven) - finalTotal).toLocaleString('id-ID')}`);
-  }
-  lines.push('================================');
-  lines.push('  Terima kasih sudah berkunjung!');
-  lines.push('        *Trisha Coffea*');
-  lines.push('================================');
-  return lines.join('\n');
-}
-
-function sendWhatsApp(phone: string, text: string) {
-  let normalized = phone.replace(/\D/g, '');
-  if (normalized.startsWith('0')) normalized = '62' + normalized.slice(1);
-  else if (!normalized.startsWith('62')) normalized = '62' + normalized;
-  const url = `https://wa.me/${normalized}?text=${encodeURIComponent(text)}`;
-  window.open(url, '_blank');
-}
-
 export default function PosInterface() {
-
   // ---------------- DATA ----------------
   const [availableDiscounts, setAvailableDiscounts] = useState<any[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -112,10 +95,15 @@ export default function PosInterface() {
   const [activeCategory, setActiveCategory] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Order info
+  // Order info & contact selection
   const [orderName, setOrderName] = useState('');
   const [orderContact, setOrderContact] = useState('');
   const [orderType, setOrderType] = useState<OrderType>('dine_in');
+  const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
+  const [isContactModalOpen, setIsContactModalOpen] = useState(false);
+  const [newContactName, setNewContactName] = useState('');
+  const [newContactPhone, setNewContactPhone] = useState('');
+  const [savingContact, setSavingContact] = useState(false);
 
   // Modals & Drawers
   const [selectedItem, setSelectedItem] = useState<any>(null);
@@ -140,7 +128,13 @@ export default function PosInterface() {
   useEffect(() => {
     async function getMenuItems() {
       try {
-        const [rows, discounts, categories] = await Promise.all([listMenu(), listDiscounts(), listMenuCategories()]);
+        const [rows, discounts, categories, contactList, kitchenOrders] = await Promise.all([
+          listMenu(),
+          listDiscounts(),
+          listMenuCategories(),
+          listContacts(),
+          listKitchenOrders(),
+        ]);
         const normalizedItems = rows.map((item: any, index: number) => ({
           ...item,
           id: String(item.product_id),
@@ -151,13 +145,19 @@ export default function PosInterface() {
         }));
         setMenuItems(normalizedItems);
         setMenuCategories(categories);
-        setAvailableDiscounts(discounts.filter((discount: any) => discount.is_active).map((discount: any) => ({
-          ...discount,
-          id: discount.discount_id,
-          name: discount.discount_name,
-          type: discount.discount_type,
-          value: Number(discount.discount_value),
-        })));
+        setContacts(contactList);
+        setQueueCount(Array.isArray(kitchenOrders) ? kitchenOrders.length : 0);
+        setAvailableDiscounts(
+          discounts
+            .filter((discount: any) => discount.is_active)
+            .map((discount: any) => ({
+              ...discount,
+              id: discount.discount_id,
+              name: discount.discount_name,
+              type: discount.discount_type,
+              value: Number(discount.discount_value),
+            }))
+        );
       } catch (error) {
         console.error('Failed to load menu:', error);
         setMenuItems([]);
@@ -170,6 +170,7 @@ export default function PosInterface() {
     void getMenuItems();
   }, []);
 
+  // Poll incoming scan order count
   useEffect(() => {
     let active = true;
     const refreshCount = async () => {
@@ -187,6 +188,35 @@ export default function PosInterface() {
       window.clearInterval(intervalId);
     };
   }, []);
+
+  // Keep ODS queue count synced in real time
+  useEffect(() => {
+    const supabase = createSupabaseBrowserClient();
+    const refreshQueueCount = async () => {
+      try {
+        const orders = await listKitchenOrders();
+        setQueueCount(Array.isArray(orders) ? orders.length : 0);
+      } catch {
+        // Ignore transient errors
+      }
+    };
+
+    const channel = supabase
+      .channel('pos-ods-queue-count')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'kitchen_orders' }, () => {
+        void refreshQueueCount();
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'kitchen_orders' }, () => {
+        void refreshQueueCount();
+      })
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, []);
+
+  const selectedContact = contacts.find(c => c.contact_id === selectedContactId) ?? null;
 
   // ---------------- MATH LOGIC ----------------
   const subtotal = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
@@ -215,7 +245,6 @@ export default function PosInterface() {
   const splitRemaining = Math.max(0, finalTotal - splitPaid);
   const splitCashTotal = splitPayments.filter(p => p.method === 'cash').reduce((sum, p) => sum + p.amount, 0);
   const splitCashlessTotal = splitPaid - splitCashTotal;
-  // Empty input = "the rest of the bill" / "exact cash"
   const pendingSplitAmount = splitAmount === '' ? splitRemaining : Number(splitAmount);
   const pendingCashReceived = splitCashReceived === '' ? pendingSplitAmount : Number(splitCashReceived);
   const canAddSplit =
@@ -224,6 +253,38 @@ export default function PosInterface() {
     (splitMethod !== 'cash' || pendingCashReceived >= pendingSplitAmount);
 
   // ---------------- ACTIONS ----------------
+  const handleSelectContact = (contact: Contact | null) => {
+    if (contact) {
+      setSelectedContactId(contact.contact_id);
+      setOrderName(contact.name);
+      setOrderContact(contact.phone);
+    } else {
+      setSelectedContactId(null);
+      setOrderName('');
+      setOrderContact('');
+    }
+    setIsContactModalOpen(false);
+  };
+
+  const handleAddContact = async () => {
+    if (!newContactName.trim() || !newContactPhone.trim()) return;
+    setSavingContact(true);
+    try {
+      const created = await createContact({ name: newContactName.trim(), phone: newContactPhone.trim() });
+      setContacts(prev => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setSelectedContactId(created.contact_id);
+      setOrderName(created.name);
+      setOrderContact(created.phone);
+      setNewContactName('');
+      setNewContactPhone('');
+      setIsContactModalOpen(false);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Failed to save contact.');
+    } finally {
+      setSavingContact(false);
+    }
+  };
+
   const handleProductClick = (item: any) => {
     if (item.options && item.options.length > 0) {
       setSelectedItem(item);
@@ -239,7 +300,6 @@ export default function PosInterface() {
     let unitPrice = item.price;
     const notes: string[] = [];
 
-    // Walk the option groups in their defined order so identical picks always produce identical notes
     (item.options ?? []).forEach((group: any) => {
       const mod = selectedModifiers[group.group];
       if (!mod) return;
@@ -249,7 +309,6 @@ export default function PosInterface() {
     const notesText = notes.join(', ');
 
     setCart(prev => {
-      // Same product + same modifiers + same price (and no custom note) => stack
       const existing = prev.find(c =>
         c.id === item.id && c.unitPrice === unitPrice && c.notes === notesText && !c.orderNote
       );
@@ -385,23 +444,23 @@ export default function PosInterface() {
   };
 
   // ---------------- SUBMIT ----------------
-  // Every payment path (QRIS / Other / Cash / Open Bill / Split) ends up here.
   const processOrder = async (payments: PaymentLine[], isOpenBill = false) => {
-    const contact = normalizeWhatsAppNumber(orderContact);
+    const contact = normalizeWhatsAppNumber(orderContact || selectedContact?.phone || '');
+    const customerName = orderName.trim() || selectedContact?.name || '';
 
-    if (orderContact.trim() && !isValidWhatsAppNumber(contact)) {
+    if ((orderContact.trim() || selectedContact?.phone) && !isValidWhatsAppNumber(contact)) {
       alert('The WhatsApp number looks invalid. Please check it or clear the field.');
       return;
     }
-    if (isOpenBill && !orderName.trim()) {
-      alert('Please enter an order name so the open bill can be found later.');
+    if (isOpenBill && !customerName) {
+      alert('Please enter an order name or select a contact so the open bill can be found later.');
       return;
     }
 
     const receiptText = buildReceipt(payments, isOpenBill);
 
     // Open the tab now (inside the click) so the browser doesn't block it as a popup after the await.
-    const waWindow = contact ? window.open('', '_blank') : null;
+    const waWindow = contact && !isOpenBill ? window.open('', '_blank') : null;
 
     setIsSubmittingOrder(true);
 
@@ -410,7 +469,7 @@ export default function PosInterface() {
         payment_method: isOpenBill ? 'open_bill' : payments.length > 1 ? 'split' : payments[0].method,
         status: isOpenBill ? 'pending' : 'paid',
         cash_received: payments.reduce((sum, p) => sum + p.cashReceived, 0),
-        customer_name: orderName.trim() || null,
+        customer_name: customerName || null,
         customer_contact: contact || null,
         order_type: orderType,
         payments: payments.map(p => ({
@@ -427,6 +486,10 @@ export default function PosInterface() {
         })),
       });
 
+      void listKitchenOrders()
+        .then(orders => setQueueCount(Array.isArray(orders) ? orders.length : 0))
+        .catch(() => {});
+
       if (waWindow) {
         waWindow.location.href = `https://wa.me/${contact}?text=${encodeURIComponent(receiptText)}`;
       }
@@ -442,6 +505,7 @@ export default function PosInterface() {
       setAppliedDiscounts([]);
       setOrderName('');
       setOrderContact('');
+      setSelectedContactId(null);
       setOrderType('dine_in');
       closeCheckout();
     } catch (error) {
@@ -463,12 +527,20 @@ export default function PosInterface() {
               <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 bg-slate-200 rounded-full"><X size={16} /></button>
             </div>
             <div className="p-4 flex flex-col gap-2">
-              <Link href="/" className="p-3 rounded-lg bg-blue-50 text-blue-700 font-bold flex items-center gap-3"><Store size={20}/> POS</Link>
-              <Link href="/history" className="p-3 rounded-lg text-slate-600 hover:bg-slate-50 font-bold flex items-center gap-3"><History size={20}/> LOGS</Link>
-              <Link href="/orders" className="p-3 rounded-lg text-slate-600 hover:bg-slate-50 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-3"><ClipboardList size={20}/> ORDERS</span>{incomingScanOrderCount > 0 && <span className="rounded-full bg-red-600 px-2 py-0.5 text-xs text-white">{incomingScanOrderCount}</span>}</Link>
-              <Link href="/manage" className="p-3 rounded-lg text-slate-600 hover:bg-slate-50 font-bold flex items-center gap-3"><Settings size={20}/> EDIT</Link>
-              <hr className="my-2 border-slate-100"/>
-              <Link href="/kitchen" className="p-3 rounded-lg text-slate-600 hover:bg-orange-50 hover:text-orange-600 font-bold flex items-center gap-3"><Flame size={20}/> KDS</Link>
+              <Link href="/" className="p-3 rounded-lg bg-blue-50 text-blue-700 font-bold flex items-center gap-3"><Store size={20} /> POS</Link>
+              <Link href="/history" className="p-3 rounded-lg text-slate-600 hover:bg-slate-50 font-bold flex items-center gap-3"><History size={20} /> LOGS</Link>
+              <Link href="/orders" className="p-3 rounded-lg text-slate-600 hover:bg-slate-50 font-bold flex items-center justify-between gap-3">
+                <span className="flex items-center gap-3"><ClipboardList size={20} /> ORDERS</span>
+                {incomingScanOrderCount > 0 && <span className="rounded-full bg-red-600 px-2 py-0.5 text-xs text-white">{incomingScanOrderCount}</span>}
+              </Link>
+              <Link href="/manage" className="p-3 rounded-lg text-slate-600 hover:bg-slate-50 font-bold flex items-center gap-3"><Settings size={20} /> EDIT</Link>
+              <hr className="my-2 border-slate-100" />
+              <Link href="/kitchen" className="p-3 rounded-lg text-slate-600 hover:bg-orange-50 hover:text-orange-600 font-bold flex items-center justify-between">
+                <span className="leading-none">ODS</span>
+                <span className={`inline-flex items-center justify-center min-w-[24px] h-6 px-2 rounded-full text-xs font-bold leading-none tabular-nums ${queueCount > 0 ? 'bg-orange-500 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                  {queueCount}
+                </span>
+              </Link>
             </div>
           </div>
         </div>
@@ -550,7 +622,7 @@ export default function PosInterface() {
               <button onClick={() => setIsContactModalOpen(false)} className="p-2 bg-slate-200 hover:bg-slate-300 rounded-full"><X size={20} /></button>
             </div>
             <div className="p-4 flex flex-col gap-2 overflow-y-auto flex-1">
-              <button onClick={() => { setSelectedContactId(null); setIsContactModalOpen(false); }}
+              <button onClick={() => handleSelectContact(null)}
                 className={`flex items-center gap-3 p-3 rounded-lg border-2 transition-all text-left ${!selectedContactId ? 'border-blue-600 bg-blue-50' : 'border-slate-200 hover:border-slate-300'}`}>
                 <User size={18} className="text-slate-400" />
                 <span className="font-medium text-slate-600">No contact (walk-in)</span>
@@ -558,7 +630,7 @@ export default function PosInterface() {
               {contacts.map(contact => {
                 const isSelected = selectedContactId === contact.contact_id;
                 return (
-                  <button key={contact.contact_id} onClick={() => { setSelectedContactId(contact.contact_id); setIsContactModalOpen(false); }}
+                  <button key={contact.contact_id} onClick={() => handleSelectContact(contact)}
                     className={`flex items-center justify-between p-3 rounded-lg border-2 transition-all text-left ${isSelected ? 'border-blue-600 bg-blue-50' : 'border-slate-200 hover:border-slate-300'}`}>
                     <div>
                       <span className={`font-bold ${isSelected ? 'text-blue-700' : 'text-slate-800'}`}>{contact.name}</span>
@@ -628,7 +700,6 @@ export default function PosInterface() {
                   </>
                 ) : (
                   <div className="flex flex-col gap-3">
-                    {/* Method for the next portion */}
                     <div className="grid grid-cols-3 gap-3">
                       {splitMethodOptions.map(({ value, label, Icon, active, iconClass }) => (
                         <button
@@ -642,7 +713,6 @@ export default function PosInterface() {
                       ))}
                     </div>
 
-                    {/* Amount for this portion */}
                     {splitRemaining > 0 && (
                       <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
                         <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">
@@ -683,7 +753,6 @@ export default function PosInterface() {
                       </div>
                     )}
 
-                    {/* Payments already added */}
                     {splitPayments.length > 0 && (
                       <div className="flex flex-col gap-2">
                         {splitPayments.map((p, index) => (
@@ -701,7 +770,6 @@ export default function PosInterface() {
                       </div>
                     )}
 
-                    {/* Summary */}
                     <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-sm">
                       <div className="flex justify-between text-slate-600 mb-1"><span>Cash</span><span>Rp {splitCashTotal.toLocaleString('id-ID')}</span></div>
                       <div className="flex justify-between text-slate-600 mb-2"><span>Cashless</span><span>Rp {splitCashlessTotal.toLocaleString('id-ID')}</span></div>
@@ -792,12 +860,15 @@ export default function PosInterface() {
             <nav className="hidden md:flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
               <Link href="/" className="px-4 py-1.5 rounded-md text-sm font-bold bg-white text-blue-600 shadow-sm">POS</Link>
               <Link href="/history" className="px-4 py-1.5 rounded-md text-sm font-bold text-slate-500 hover:text-slate-800 hover:bg-slate-200">LOGS</Link>
-              <Link href="/orders" className="flex items-center gap-1 rounded-md px-4 py-1.5 text-sm font-bold text-slate-500 hover:bg-slate-200 hover:text-slate-800">ORDERS{incomingScanOrderCount > 0 && <span className="ml-1 rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] leading-none text-white">{incomingScanOrderCount}</span>}</Link>
+              <Link href="/orders" className="flex items-center gap-1 rounded-md px-4 py-1.5 text-sm font-bold text-slate-500 hover:bg-slate-200 hover:text-slate-800">
+                ORDERS
+                {incomingScanOrderCount > 0 && <span className="ml-1 rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] leading-none text-white">{incomingScanOrderCount}</span>}
+              </Link>
               <Link href="/manage" className="px-4 py-1.5 rounded-md text-sm font-bold text-slate-500 hover:text-slate-800 hover:bg-slate-200">EDIT</Link>
               <div className="w-px h-4 bg-slate-300 mx-1"></div>
               <Link href="/kitchen" className="px-4 py-1.5 rounded-md text-sm font-bold text-slate-500 hover:text-orange-600 hover:bg-orange-100 inline-flex items-center gap-1.5">
                 <span className={`inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-xs font-bold leading-none tabular-nums ${queueCount > 0 ? 'bg-orange-500 text-white' : 'bg-slate-200 text-slate-600'}`}>
-                {queueCount}
+                  {queueCount}
                 </span>
                 <span className="leading-none">ODS</span>
               </Link>
@@ -858,8 +929,48 @@ export default function PosInterface() {
           <span className="bg-blue-100 text-blue-700 text-xs font-bold px-2 py-1 rounded">New Ticket</span>
         </div>
 
+        {/* Contact selector */}
+        <div className="px-3 pt-3 pb-2 bg-white">
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => setIsContactModalOpen(true)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setIsContactModalOpen(true);
+              }
+            }}
+            className="w-full flex items-center justify-between gap-2 p-2.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors text-left cursor-pointer"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <Phone size={16} className={selectedContact ? 'text-blue-600 shrink-0' : 'text-slate-400 shrink-0'} />
+              {selectedContact ? (
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-slate-800 truncate">{selectedContact.name}</p>
+                  <p className="text-xs text-slate-500 truncate">{selectedContact.phone}</p>
+                </div>
+              ) : (
+                <span className="text-sm text-slate-500 font-medium">Select Saved Contact (Optional)</span>
+              )}
+            </div>
+            {selectedContact && (
+              <button
+                type="button"
+                onClick={e => {
+                  e.stopPropagation();
+                  handleSelectContact(null);
+                }}
+                className="shrink-0 self-center text-slate-300 hover:text-red-500 p-1"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+        </div>
+
         {/* Order name & contact */}
-        <div className="p-3 border-b border-slate-100 bg-white grid grid-cols-2 gap-2">
+        <div className="px-3 pb-2 bg-white grid grid-cols-2 gap-2">
           <input
             type="text"
             value={orderName}

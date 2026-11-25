@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Banknote, Check, CreditCard, Download, Plus, Printer, QrCode, Receipt, X } from 'lucide-react';
+import { ArrowLeft, Banknote, Check, CreditCard, Download, MessageCircle, Plus, Printer, QrCode, Receipt, X } from 'lucide-react';
 import Link from 'next/link';
 import { cancelOpenBill, listTransactions, payOpenBill, type OpenBillPaymentInput } from '@/app/actions/transactions';
 
@@ -19,6 +19,7 @@ type Transaction = {
   total: number;
   customer_name: string | null;
   customer_contact: string | null;
+  contacts?: { contact_id: string; name: string; phone: string } | null;
   transaction_items: { product_name: string; quantity: number; price: number; order_note: string }[];
   transaction_payments: { method: string; amount: number; cash_received: number }[];
 };
@@ -80,6 +81,44 @@ function paymentSummary(transaction: Transaction) {
 function formatOrderType(orderType: Transaction['order_type']) {
   if (orderType === 'delivery') return 'Delivery';
   return orderType === 'takeaway' ? 'Takeaway' : 'Dine in';
+}
+
+function formatReceiptText(tx: Transaction) {
+  const date = new Date(tx.created_at).toLocaleString('id-ID');
+  const contactName = tx.contacts?.name || tx.customer_name;
+  const lines: string[] = [
+    '================================',
+    '       *TRISHA COFFEA*',
+    '================================',
+    `Tanggal : ${date}`,
+    `Bayar   : ${paymentSummary(tx)}`,
+    `Status  : ${tx.status.toUpperCase()}`,
+  ];
+  if (contactName) lines.push(`Pelanggan: ${contactName}`);
+  lines.push('--------------------------------');
+  tx.transaction_items.forEach(item => {
+    lines.push(`${item.quantity}x ${item.product_name}`);
+    lines.push(`   Rp ${Number(item.price * item.quantity).toLocaleString('id-ID')}`);
+    if (item.order_note) lines.push(`   Note: ${item.order_note}`);
+  });
+  lines.push('--------------------------------');
+  lines.push(`Subtotal : Rp ${Number(tx.subtotal).toLocaleString('id-ID')}`);
+  if (Number(tx.discount_total) > 0) {
+    lines.push(`Diskon   : -Rp ${Number(tx.discount_total).toLocaleString('id-ID')}`);
+  }
+  lines.push(`*TOTAL   : Rp ${Number(tx.total).toLocaleString('id-ID')}*`);
+  lines.push('================================');
+  lines.push('  Terima kasih sudah berkunjung!');
+  lines.push('        *Trisha Coffea*');
+  lines.push('================================');
+  return lines.join('\n');
+}
+
+function sendWhatsApp(phone: string, text: string) {
+  let normalized = phone.replace(/\D/g, '');
+  if (normalized.startsWith('0')) normalized = `62${normalized.slice(1)}`;
+  else if (!normalized.startsWith('62')) normalized = `62${normalized}`;
+  window.open(`https://wa.me/${normalized}?text=${encodeURIComponent(text)}`, '_blank');
 }
 
 export default function HistoryInterface() {
@@ -215,8 +254,8 @@ export default function HistoryInterface() {
       ...transactions.map(item => [
         item.transaction_id,
         new Date(item.created_at).toLocaleString('id-ID'),
-        item.customer_name ?? '',
-        item.customer_contact ?? '',
+        item.contacts?.name ?? item.customer_name ?? '',
+        item.contacts?.phone ?? item.customer_contact ?? '',
         formatOrderType(item.order_type),
         item.transaction_payments?.map(payment =>
           `${formatPaymentMethod(payment.method)} Rp ${Number(payment.amount).toLocaleString('id-ID')}`
@@ -239,7 +278,7 @@ export default function HistoryInterface() {
   }
 
   function handleSendWhatsApp(tx: Transaction) {
-    const phone = tx.contacts?.phone;
+    const phone = tx.contacts?.phone || tx.customer_contact;
     if (!phone) {
       alert('Transaksi ini tidak memiliki nomor kontak. Tambahkan kontak saat membuat order.');
       return;
@@ -297,9 +336,11 @@ export default function HistoryInterface() {
                   const isOpenBill = transaction.payment_method.toLowerCase() === 'open_bill';
                   const isPending = transaction.status.toLowerCase() === 'pending';
                   const isVoided = transaction.status.toLowerCase() === 'voided';
+                  const displayName = transaction.contacts?.name || transaction.customer_name || 'Walk-in';
+                  const displayPhone = transaction.contacts?.phone || transaction.customer_contact;
                   return <tr key={transaction.transaction_id} className="border-b last:border-0 hover:bg-slate-50">
                     <td className="whitespace-nowrap px-5 py-4">{new Date(transaction.created_at).toLocaleString('id-ID')}</td>
-                    <td className="px-5 py-4"><div className="font-medium">{transaction.customer_name || 'Walk-in'}</div>{transaction.customer_contact && <div className="text-xs text-slate-400">{transaction.customer_contact}</div>}</td>
+                    <td className="px-5 py-4"><div className="font-medium">{displayName}</div>{displayPhone && <div className="text-xs text-slate-400">{displayPhone}</div>}</td>
                     <td className="px-5 py-4">{formatOrderType(transaction.order_type)}</td>
                     <td className="px-5 py-4 font-medium">{paymentSummary(transaction)}</td>
                     <td className="px-5 py-4"><span className={`border px-2.5 py-1 text-xs font-semibold ${isPending ? 'border-amber-200 bg-amber-100 text-amber-700' : isVoided ? 'border-red-200 bg-red-100 text-red-700' : 'border-emerald-200 bg-emerald-100 text-emerald-700'}`}>{transaction.status}</span></td>
@@ -307,6 +348,7 @@ export default function HistoryInterface() {
                     <td className="px-5 py-4 text-right"><div className="flex justify-end gap-2">
                       {isOpenBill && isPending && <button onClick={() => startPayment(transaction)} className="inline-flex items-center gap-1 border border-emerald-600 bg-emerald-600 px-2.5 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-700"><Check size={14} />Pay</button>}
                       {isOpenBill && isPending && <button onClick={() => void cancelBill(transaction)} disabled={closingId === transaction.transaction_id} className="inline-flex items-center gap-1 border border-red-200 bg-white px-2.5 py-1.5 text-xs font-bold text-red-600 shadow-sm hover:bg-red-50 disabled:opacity-50">{closingId === transaction.transaction_id ? 'Cancelling' : 'Cancel'}</button>}
+                      {displayPhone && <button aria-label="Send WhatsApp receipt" onClick={() => handleSendWhatsApp(transaction)} className="border border-emerald-200 p-2 text-emerald-600 shadow-sm hover:bg-emerald-50"><MessageCircle size={18} /></button>}
                       <button aria-label="View transaction details" onClick={() => setSelected(transaction)} className="border border-blue-100 p-2 text-blue-600 shadow-sm hover:bg-blue-50"><Receipt size={18} /></button>
                     </div></td>
                   </tr>;
@@ -321,8 +363,8 @@ export default function HistoryInterface() {
         <div className="w-full max-w-md border border-slate-200 bg-white p-5 shadow-xl" onClick={event => event.stopPropagation()}>
           <div className="mb-5 flex items-start justify-between"><div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Transaction</p><h2 className="font-bold">#{selected.transaction_id.slice(0, 8)}</h2></div><button onClick={() => setSelected(null)} className="border border-slate-200 p-1 text-slate-400 shadow-sm hover:bg-slate-100"><X size={20} /></button></div>
           <div className="mb-4 border-b pb-4 text-sm">
-            <p><span className="font-semibold">Order:</span> {selected.customer_name || 'Walk-in'}</p>
-            {selected.customer_contact && <p><span className="font-semibold">Phone:</span> {selected.customer_contact}</p>}
+            <p><span className="font-semibold">Order:</span> {selected.contacts?.name || selected.customer_name || 'Walk-in'}</p>
+            {(selected.contacts?.phone || selected.customer_contact) && <p><span className="font-semibold">Phone:</span> {selected.contacts?.phone || selected.customer_contact}</p>}
             <p><span className="font-semibold">Type:</span> {formatOrderType(selected.order_type)}</p>
             {selected.scan_payment_preference && <p><span className="font-semibold">Payment preference (at order):</span> {formatPaymentMethod(selected.scan_payment_preference)}</p>}
           </div>
@@ -355,8 +397,8 @@ export default function HistoryInterface() {
           <div className="flex items-start justify-between border-b bg-slate-50 p-5">
             <div>
               <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Settle open bill</p>
-              <h2 className="mt-1 font-bold">{paymentTarget.customer_name || 'Walk-in'} · {formatOrderType(paymentTarget.order_type)}</h2>
-              {paymentTarget.customer_contact && <p className="text-xs text-slate-500">{paymentTarget.customer_contact}</p>}
+              <h2 className="mt-1 font-bold">{paymentTarget.contacts?.name || paymentTarget.customer_name || 'Walk-in'} · {formatOrderType(paymentTarget.order_type)}</h2>
+              {(paymentTarget.contacts?.phone || paymentTarget.customer_contact) && <p className="text-xs text-slate-500">{paymentTarget.contacts?.phone || paymentTarget.customer_contact}</p>}
             </div>
             <button disabled={settling} onClick={() => setPaymentTarget(null)} className="border border-slate-200 p-1 text-slate-400 hover:bg-slate-100 disabled:opacity-50"><X size={20} /></button>
           </div>

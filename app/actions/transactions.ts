@@ -25,6 +25,7 @@ export async function createTransaction(input: {
   notes?: string;
   customer_name?: string | null;
   customer_contact?: string | null;
+  contact_id?: string | null;
   order_type?: 'dine_in' | 'takeaway';
   payments?: TransactionPaymentInput[];
 }) {
@@ -94,7 +95,7 @@ export async function listTransactions(options?: {
   if (!user) throw new Error('Authentication required');
   let query = supabase
     .from('transactions')
-    .select('*, transaction_items(*), transaction_discounts(*), transaction_payments(*)')
+    .select('*, contacts(*), transaction_items(*), transaction_discounts(*), transaction_payments(*)')
     .order('created_at', { ascending: false })
     .limit(options?.limit ?? 1000);
   if (options?.from) query = query.gte('created_at', options.from);
@@ -120,11 +121,6 @@ export async function cancelOpenBill(transactionId: string) {
   const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Authentication required');
-
-  const updatePayload: Record<string, string> = { status: 'paid' };
-  if (paymentMethod && paymentMethod !== 'open_bill') {
-    updatePayload.payment_method = paymentMethod;
-  }
 
   const { data, error } = await supabase
     .from('transactions')
