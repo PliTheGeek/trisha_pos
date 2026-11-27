@@ -33,16 +33,15 @@ export async function createTransaction(input: {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Authentication required');
 
-  const rpcParams: Record<string, unknown> = {
+  const { data, error } = await supabase.rpc('create_pos_transaction', {
     p_payment_method: input.payment_method,
     p_items: input.items,
     p_discount_ids: input.discount_ids ?? [],
     p_cash_received: input.cash_received ?? 0,
     p_status: input.status ?? 'paid',
     p_notes: input.notes ?? '',
-  };
-  if (input.contact_id) rpcParams.p_contact_id = input.contact_id;
-  const { data, error } = await supabase.rpc('create_pos_transaction', rpcParams);
+    p_contact_id: input.contact_id ?? null,
+  });
   if (error) throw new Error(error.message);
 
   const { error: detailsError } = await supabase.rpc('record_pos_transaction_details', {
