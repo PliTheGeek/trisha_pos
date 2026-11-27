@@ -969,6 +969,19 @@ export default function PosInterface() {
           </div>
         </div>
 
+        {/* Walk-in name (optional, not saved to contacts) */}
+        {!selectedContact && (
+          <div className="px-3 pb-2 bg-white">
+            <input
+              type="text"
+              value={orderName}
+              onChange={(e) => setOrderName(e.target.value)}
+              placeholder="Walk-in / Order name (Optional)"
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500"
+            />
+          </div>
+        )}
+
         {/* Order type */}
         <div className="grid grid-cols-2 gap-2 border-b border-slate-100 bg-white p-3 pt-0">
           {([
