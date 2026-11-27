@@ -28,11 +28,10 @@ import {
 import Link from 'next/link';
 import Image from 'next/image';
 import { createTransaction } from '@/app/actions/transactions';
-import { listDiscounts } from '@/app/actions/discounts';
-import { listMenu, listMenuCategories } from '@/app/actions/menu';
 import { getIncomingScanOrderCount } from '@/app/actions/scan-orders';
-import { listContacts, createContact, type Contact } from '@/app/actions/contacts';
+import { createContact, type Contact } from '@/app/actions/contacts';
 import { listKitchenOrders } from '@/app/actions/kitchen';
+import { getPosInitialData } from '@/app/actions/pos';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
 // ---------------- TYPES ----------------
@@ -128,13 +127,13 @@ export default function PosInterface() {
   useEffect(() => {
     async function getMenuItems() {
       try {
-        const [rows, discounts, categories, contactList, kitchenOrders] = await Promise.all([
-          listMenu(),
-          listDiscounts(),
-          listMenuCategories(),
-          listContacts(),
-          listKitchenOrders(),
-        ]);
+        const {
+          menu: rows,
+          discounts,
+          categories,
+          contacts: contactList,
+          kitchenOrders,
+        } = await getPosInitialData();
         const normalizedItems = rows.map((item: any, index: number) => ({
           ...item,
           id: String(item.product_id),

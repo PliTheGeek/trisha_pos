@@ -44,20 +44,23 @@ export async function createTransaction(input: {
   });
   if (error) throw new Error(error.message);
 
-  const { error: detailsError } = await supabase.rpc('record_pos_transaction_details', {
-    p_transaction_id: data,
-    p_customer_name: input.customer_name ?? null,
-    p_customer_contact: input.customer_contact ?? null,
-    p_order_type: input.order_type ?? 'dine_in',
-    p_payments: input.payments ?? [],
-  });
-  if (detailsError) throw new Error(detailsError.message);
-
   const productIds = input.items.map(item => item.product_id);
-  const { data: menuItems, error: menuError } = await supabase
-    .from('menu_items')
-    .select('product_id, product_name, price')
-    .in('product_id', productIds);
+
+  const [{ error: detailsError }, { data: menuItems, error: menuError }] = await Promise.all([
+    supabase.rpc('record_pos_transaction_details', {
+      p_transaction_id: data,
+      p_customer_name: input.customer_name ?? null,
+      p_customer_contact: input.customer_contact ?? null,
+      p_order_type: input.order_type ?? 'dine_in',
+      p_payments: input.payments ?? [],
+    }),
+    supabase
+      .from('menu_items')
+      .select('product_id, product_name, price')
+      .in('product_id', productIds),
+  ]);
+
+  if (detailsError) throw new Error(detailsError.message);
   if (menuError) throw new Error(menuError.message);
 
   const kitchenItems = input.items.map(item => {
