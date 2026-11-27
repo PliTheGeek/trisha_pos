@@ -72,12 +72,20 @@ export async function createTransaction(input: {
     };
   });
 
+  const ticketLabel = [
+    input.customer_name?.trim() || 'Walk-in',
+    input.order_type === 'takeaway' ? 'Takeaway' : 'Dine in',
+    input.notes?.trim(),
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
   const { error: kitchenError } = await supabase
     .from('kitchen_orders')
     .insert({
       order_number: `ORD-${String(data).slice(0, 8).toUpperCase()}`,
       items: kitchenItems,
-      notes: input.notes ?? '',
+      notes: ticketLabel,
     });
   if (kitchenError) throw new Error(kitchenError.message);
 
